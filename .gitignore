@@ -1,0 +1,6 @@
+# fora do repositório público
+documentos/
+prints/
+firebase-debug.log
+.DS_Store
+.claude/
