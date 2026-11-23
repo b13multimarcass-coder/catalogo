@@ -1,10 +1,10 @@
-import { abrir, esgotado, totalEstoque, precoAtual, brl, esc, ico, icoWhats, comprimir, CATEGORIAS, TAMANHOS, STATUS_PEDIDO, soDigitos } from './data.js';
+import { moverPilula, abrir, esgotado, totalEstoque, precoAtual, brl, esc, ico, icoWhats, comprimir, CATEGORIAS, TAMANHOS, STATUS_PEDIDO, soDigitos, LIGAS, ligaAuto, codigoCupom, ligaDe, VERSOES, persDe } from './data.js';
 import { real as pagamentoReal, gerarEtiqueta, buscarEndereco } from './servidor.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const api = await abrir();
 const DIA = 86400000;
-const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago', busca: '', loja: null, produtos: [], priv: {}, stats: {}, movs: [], pedidos: [], rem: {} };
+const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago', busca: '', loja: null, produtos: [], priv: {}, stats: {}, movs: [], pedidos: [], rem: {}, cupons: [], leads: [] };
 const catalogo = new URL('./', location.href).href;
 const linkProduto = (id) => catalogo + '#p/' + id;
 
@@ -59,8 +59,8 @@ function telaLogin(erro = '') {
 }
 
 async function carregar() {
-  const [loja, produtos, priv, stats, movs, pedidos, rem] = await Promise.all([api.config(), api.produtos(), api.privados(), api.stats(), api.movimentos(), api.pedidos(), api.remetente().catch(() => ({}))]);
-  Object.assign(S, { loja, produtos, priv, stats, movs, pedidos, rem });
+  const [loja, produtos, priv, stats, movs, pedidos, rem, cupons, leads] = await Promise.all([api.config(), api.produtos(), api.privados(), api.stats(), api.movimentos(), api.pedidos(), api.remetente().catch(() => ({})), api.cupons().catch(() => []), api.leads().catch(() => [])]);
+  Object.assign(S, { loja, produtos, priv, stats, movs, pedidos, rem, cupons, leads });
   S.produtos.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
 async function recarregar() { await carregar(); desenhar(); }
@@ -73,12 +73,19 @@ const ABAS = [
   { id: 'movs', nome: 'Estoque', ic: 'setas' },
   { id: 'loja', nome: 'Loja', ic: 'loja' }
 ];
+const pilulaTabs = () => moverPilula($('.tabs'), 'tabs', matchMedia('(min-width: 1024px)').matches ? [0, 0] : [12, 7]);
+addEventListener('resize', pilulaTabs);
+let chaveAdm = '';
 function desenhar() {
+  const chave = [S.aba, S.filtroProd, S.filtroPed, S.periodo].join('|');
+  const anima = chave !== chaveAdm;
+  chaveAdm = chave;
   const corpo = { painel: telaPainel, pedidos: telaPedidos, produtos: telaProdutos, movs: telaMovs, loja: telaLoja }[S.aba]();
   const aEnviar = S.pedidos.filter((p) => p.status === 'pago').length;
   $('#app').innerHTML = `
-    <div class="adm">${api.modo === 'demo' ? '<div class="demo-aviso" style="padding-top:10px">Modo demonstração, com produtos de exemplo</div>' : ''}${corpo}</div>
+    <div class="adm ${anima ? 'anima' : ''}">${api.modo === 'demo' ? '<div class="demo-aviso" style="padding-top:10px">Modo demonstração, com produtos de exemplo</div>' : ''}${corpo}</div>
     <nav class="tabs">${ABAS.map((a) => `<button class="${S.aba === a.id ? 'on' : ''}" data-aba="${a.id}">${ico(a.ic)}${a.nome}${a.id === 'pedidos' && aEnviar ? `<span class="tb-n">${aEnviar}</span>` : ''}</button>`).join('')}</nav>`;
+  pilulaTabs();
   $('.tabs').onclick = (e) => {
     const b = e.target.closest('[data-aba]');
     if (!b) return;
@@ -99,6 +106,7 @@ function ligar() {
     else if (acao === 'filtroProd') { S.filtroProd = v; desenhar(); }
     else if (acao === 'editar') editor(v);
     else if (acao === 'novo') editor(null);
+    else if (acao === 'lote') lote();
     else if (acao === 'mov') formMov(v);
     else if (acao === 'vendaDe') formMov('venda', v);
     else if (acao === 'desfazer') desfazer(v);
@@ -247,6 +255,8 @@ function abrirPedido(id) {
   pg.innerHTML = `
     <div class="pg-top"><button class="icon-btn" data-x="fechar" aria-label="Fechar">${ico('fechar')}</button><b>Pedido ${esc(p.id)}</b><span style="width:44px"></span></div>
     <div class="cnt">
+      ${p.obs ? `<div class="alerta" style="margin:0 0 12px"><span class="ic a">${ico('alerta')}</span><span class="m">${esc(p.obs)}</span></div>` : ''}
+      ${p.itens.some((i) => i.pers) ? `<div class="alerta" style="margin:0 0 12px"><span class="ic k">${ico('camisa')}</span><span class="m">Tem peça para personalizar<small>Confira nome e número nos itens</small></span></div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 14px">${badgeSt(p.status)}<span class="muted" style="font-size:14px">${new Date(p.criadoEm).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></div>
       <div class="ped-b"><span>Cliente</span><b>${esc(p.cliente.nome)}</b><div class="muted">${esc(fmtTel(p.cliente.telefone))}</div>
         <a class="btn sec mini" style="margin-top:10px" href="${wa(`Olá, ${nome1}! Aqui é da ${S.loja.nome}, sobre o seu pedido ${p.id}.`)}" target="_blank" rel="noopener">${icoWhats(18)} Chamar no WhatsApp</a></div>
@@ -254,7 +264,9 @@ function abrirPedido(id) {
         ${e ? `<div style="white-space:pre-line;margin-top:4px">${esc(endTxt)}</div><button class="btn sec mini" data-x="copiarEnd" style="margin-top:10px">${ico('copiar', 18)} Copiar endereço</button>` : `<div class="muted">${retirada ? 'O cliente vai retirar na loja' : ''}</div>`}
         ${p.rastreio ? `<div style="margin-top:10px">Rastreio: <b>${esc(p.rastreio)}</b></div>` : ''}</div>
       <div class="ped-b"><span>Itens</span>
-        ${p.itens.map((i) => { const x = S.produtos.find((y) => y.id === i.id); return `<div class="linha" style="padding:10px 0"><img src="${x?.thumb || ''}" alt=""><div class="m"><div class="t">${esc(i.nome)}</div><div class="s">Tamanho ${esc(i.tam)} · ${i.qtd}x ${brl(i.preco)}</div></div><div class="v">${brl(i.preco * i.qtd)}</div></div>`; }).join('')}
+        ${p.itens.map((i) => { const x = S.produtos.find((y) => y.id === i.id); return `<div class="linha" style="padding:10px 0"><img src="${x?.thumb || ''}" alt=""><div class="m"><div class="t">${esc(i.nome)}</div><div class="s">Tamanho ${esc(i.tam)} · ${i.qtd}x ${brl(i.preco)}${i.cheio && i.cheio !== i.preco ? ` <s style="color:var(--tx3)">${brl(i.cheio)}</s>` : ''}</div>${i.pers ? `<div class="s" style="color:var(--tx);font-weight:600">Personalizar: ${esc([i.pers.nome, i.pers.numero].filter(Boolean).join(' · '))}</div>` : ''}</div><div class="v">${brl(i.preco * i.qtd)}</div></div>`; }).join('')}
+        ${p.desconto ? `<div class="ped-l" style="color:var(--ok)"><span>${p.cupom ? `Cupom ${esc(p.cupom.codigo)} (${p.cupom.pct}%)` : 'Desconto por quantidade'}</span><span>− ${brl(p.desconto)}</span></div>` : ''}
+        ${p.descontoPix ? `<div class="ped-l" style="color:var(--ok)"><span>Desconto no Pix</span><span>− ${brl(p.descontoPix)}</span></div>` : ''}
         <div class="ped-l"><span>Frete</span><span>${p.frete?.preco ? brl(p.frete.preco) : 'Grátis'}</span></div>
         <div class="ped-l t"><span>Total</span><span>${brl(p.total)}</span></div>
         ${metodoTxt(p.pagamento) ? `<div class="ped-l"><span>Pagamento</span><span>${metodoTxt(p.pagamento)}</span></div>` : ''}
@@ -266,7 +278,7 @@ function abrirPedido(id) {
       ${p.status === 'enviado' ? '<button class="btn" data-x="entregue">Marcar como entregue</button>' : ''}
       ${p.status === 'aguardando' ? `<p class="muted" style="font-size:14px">O cliente ainda não pagou. Se ele desistir, cancele para não ficar na lista.</p>${p.linkPagamento ? `<button class="btn sec" data-x="copiarLink" style="margin-top:10px">${ico('link', 18)} Copiar link de pagamento</button>` : ''}<button class="perigo" data-x="cancelar">Cancelar pedido</button>` : ''}
     </div>`;
-  pg.classList.add('on'); pg.scrollTop = 0; document.body.style.overflow = 'hidden';
+  pg.classList.remove('sai'); pg.classList.add('on'); pg.scrollTop = 0; document.body.style.overflow = 'hidden';
   pg.onclick = async (ev) => {
     const b = ev.target.closest('[data-x]');
     if (!b) return;
@@ -304,6 +316,7 @@ function telaProdutos() {
   return `
     <div class="adm-h"><h1>Produtos</h1><span class="muted">${S.produtos.length}</span></div>
     <div style="padding:6px 16px 0"><input class="in" id="bProd" type="search" placeholder="Buscar produto" value="${esc(S.busca)}" style="border-radius:999px;background:var(--sf);border-color:var(--sf)"></div>
+    <div style="padding:10px 16px 0"><button class="btn sec" data-acao="lote">${ico('camera', 18)} Cadastrar várias de uma vez</button></div>
     <div class="chips">${FILTROS.map(([v, n]) => `<button class="chip ${S.filtroProd === v ? 'on' : ''}" data-acao="filtroProd" data-v="${v}">${n}</button>`).join('')}</div>
     <div class="lista2" style="padding:0 16px" id="listaProd">${listaProdutos()}</div>
     <button class="fab" data-acao="novo">${ico('mais', 20)} Novo produto</button>`;
@@ -337,26 +350,213 @@ function listaProdutos() {
   }).join('');
 }
 
+/* ---------- cadastro em lote ---------- */
+// Escolhe várias fotos de uma vez: cada foto vira um produto. O que vale para todas
+// (categoria, marca, preço, custo, tamanhos) é preenchido uma vez só, no topo.
+const LOTE_KEY = 'b13-lote';
+function lote() {
+  let lembrado = {};
+  try { lembrado = JSON.parse(localStorage.getItem(LOTE_KEY)) || {}; } catch {}
+  const g = { categoria: 'camisa', versao: '', marca: '', preco: 0, custo: 0, grade: {}, ...lembrado };
+  const itens = []; // { fotos: [{full, thumb}], nome, time, preco }
+  let salvando = false;
+  const pg = $('#pagina');
+  const marcas = [...new Set(S.produtos.map((p) => p.marca).filter(Boolean))].sort();
+  const times = [...new Set(S.produtos.map((p) => p.time).filter(Boolean))].sort();
+  const totTxt = () => (somaGrade(g.grade) ? `${somaGrade(g.grade)} ${somaGrade(g.grade) === 1 ? 'peça' : 'peças'} em estoque de cada` : 'toque nos tamanhos que tem');
+  const um = () => CATEGORIAS.find((c) => c.id === g.categoria)?.um || '';
+  const sugestao = (it) => (it.time ? `${um()} ${it.time}` : '');
+  // grade de tamanhos com quantidade digitável. esc: 'g' = vale para todas; número = só aquela peça
+  const gradeDe = (sc) => (sc === 'g' ? g.grade : itens[sc].grade);
+  const somaGrade = (gr) => Object.values(gr).reduce((t, q) => t + (q || 0), 0);
+  const resumoGrade = (gr) => TAMANHOS[g.categoria].filter((t) => gr[t] !== undefined).map((t) => `${t} ${gr[t]}`).join(' · ');
+  const gradeHtml = (sc) => {
+    const gr = gradeDe(sc);
+    const usados = TAMANHOS[g.categoria].filter((t) => gr[t] !== undefined);
+    return `${usados.map((t) => `
+      <div class="var"><span class="tm">${esc(t)}</span><span class="st"></span>
+        <div class="step"><button data-gs="${sc}" data-t="${esc(t)}" data-d="-1" aria-label="Menos">−</button><input data-gq="${sc}" data-t="${esc(t)}" inputmode="numeric" value="${gr[t]}"><button data-gs="${sc}" data-t="${esc(t)}" data-d="1" aria-label="Mais">+</button></div>
+        <button class="icon-btn rm" data-grm="${sc}" data-t="${esc(t)}" aria-label="Tirar tamanho">${ico('fechar', 18)}</button></div>`).join('')}
+      <div class="chips" style="padding:8px 0 0;flex-wrap:wrap">${TAMANHOS[g.categoria].filter((t) => gr[t] === undefined).map((t) => `<button class="chip" data-gadd="${sc}" data-t="${esc(t)}">+ ${esc(t)}</button>`).join('')}</div>`;
+  };
+  const it0 = (i) => (itens[i].grade ? `A peça ${i + 1} está sem quantidade` : 'Coloque os tamanhos e a quantidade lá em cima');
+  const itemHtml = (it, i) => `
+    <div class="lote-it" data-i="${i}">
+      <div class="lote-f"><img src="${it.fotos[0].thumb}" alt="">${it.fotos.length > 1 ? `<span class="capa">${it.fotos.length} fotos</span>` : ''}</div>
+      <div class="lote-c">
+        <input class="in" data-n="nome" value="${esc(it.nome)}" placeholder="${esc(sugestao(it) || 'Nome da peça')}">
+        <div class="dupla"><input class="in" data-n="time" value="${esc(it.time)}" list="dlTimesL" placeholder="Time (opcional)"><input class="in" data-n="preco" inputmode="decimal" value="${fmtNum(it.preco)}" placeholder="${g.preco ? 'Preço ' + fmtNum(g.preco) : 'Preço'}"></div>
+        ${it.grade
+          ? `<div class="lote-g"><div class="lote-gt">Tamanhos só desta peça <button data-padrao="${i}">Usar os de cima</button></div><div id="grade-${i}">${gradeHtml(i)}</div></div>`
+          : `<div class="lote-gt">${somaGrade(g.grade) ? esc(resumoGrade(g.grade)) : 'Sem tamanhos ainda'} <button data-mudar="${i}">Mudar só desta</button></div>`}
+        <div class="lote-a">${i > 0 ? `<button data-juntar="${i}">${ico('link', 15)} Mesma peça da de cima</button>` : '<span></span>'}<button data-tirar="${i}">${ico('lixo', 15)} Tirar</button></div>
+      </div>
+    </div>`;
+
+  function desenharLote() {
+    pg.innerHTML = `
+      <div class="pg-top"><button class="icon-btn" data-x="fechar" aria-label="Fechar">${ico('fechar')}</button><b>Cadastrar várias</b><span style="width:44px"></span></div>
+      <div class="cnt">
+        <h3 class="lote-h">1. Vale para todas</h3>
+        <div class="campo"><span>Categoria</span><div class="seg" id="lCat">${CATEGORIAS.map((c) => `<button class="${g.categoria === c.id ? 'on' : ''}" data-cat="${c.id}">${c.nome}</button>`).join('')}</div></div>
+        <div class="tripla">
+          <label class="campo"><span>Preço</span><input class="in" data-g="preco" inputmode="decimal" value="${fmtNum(g.preco)}" placeholder="0,00"></label>
+          <label class="campo"><span>Custo</span><input class="in" data-g="custo" inputmode="decimal" value="${fmtNum(g.custo)}" placeholder="Opcional"></label>
+          <label class="campo"><span>Marca</span><input class="in" data-g="marca" value="${esc(g.marca)}" list="dlMarcasL" placeholder="Opcional"></label>
+        </div>
+        <label class="campo" id="lVersaoW" ${g.categoria === 'camisa' ? '' : 'hidden'}><span>Versão</span><select class="in" data-g="versao">${['', ...VERSOES].map((x) => `<option value="${x}" ${g.versao === x ? 'selected' : ''}>${x || 'Não informar'}</option>`).join('')}</select></label>
+        <datalist id="dlMarcasL">${marcas.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+        <datalist id="dlTimesL">${times.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+        <div class="campo"><span>Tamanhos e quantidade de cada peça <small class="muted" id="lGradeTot">${totTxt()}</small></span>
+          <div id="grade-g">${gradeHtml('g')}</div>
+          <div class="dupla" style="margin-top:8px"><button class="btn sec mini" data-x="gradeCheia">Grade completa</button><button class="btn sec mini" data-x="gradeZera">Limpar</button></div>
+        </div>
+
+        <h3 class="lote-h">2. Fotos <small class="muted">uma foto = uma peça</small></h3>
+        <label class="btn" style="margin-bottom:6px;cursor:pointer">${ico('camera', 18)} ${itens.length ? 'Adicionar mais fotos' : 'Escolher as fotos'}<input type="file" accept="image/*" multiple id="lFile" hidden></label>
+        <p class="muted" style="font-size:13px;margin-bottom:10px">Se uma peça tiver mais de uma foto, toque em "Mesma peça da de cima". O nome pode ficar vazio se você puser o time: vira "${esc(um())} + time".</p>
+        <div id="lItens">${itens.map(itemHtml).join('')}</div>
+      </div>
+      <div class="cta" style="margin:0"><button class="btn" data-x="salvar" ${itens.length ? '' : 'disabled'}>${itens.length ? `Salvar ${itens.length} ${itens.length === 1 ? 'produto' : 'produtos'}` : 'Escolha as fotos'}</button></div>`;
+  }
+  const atualizarCta = () => {
+    const b = $('[data-x="salvar"]', pg);
+    if (salvando || !b) return;
+    b.disabled = !itens.length;
+    b.textContent = itens.length ? `Salvar ${itens.length} ${itens.length === 1 ? 'produto' : 'produtos'}` : 'Escolha as fotos';
+  };
+  const redesenharItens = () => { $('#lItens', pg).innerHTML = itens.map(itemHtml).join(''); atualizarCta(); };
+  // redesenha a grade mexida; a de cima também atualiza o resumo das peças que usam ela
+  const redesenharGrade = (sc = 'g') => {
+    const el = $(`#grade-${sc}`, pg);
+    if (el) el.innerHTML = gradeHtml(sc);
+    if (sc === 'g') { $('#lGradeTot', pg).textContent = totTxt(); atualizarResumos(); }
+  };
+  const atualizarResumos = () => pg.querySelectorAll('.lote-it').forEach((el) => {
+    const it = itens[+el.dataset.i];
+    const r = !it?.grade && el.querySelector('.lote-gt');
+    if (r) r.firstChild.textContent = (somaGrade(g.grade) ? resumoGrade(g.grade) : 'Sem tamanhos ainda') + ' ';
+  });
+  const lembrar = () => { try { localStorage.setItem(LOTE_KEY, JSON.stringify({ categoria: g.categoria, versao: g.versao, marca: g.marca, preco: g.preco, custo: g.custo, grade: g.grade })); } catch {} };
+
+  desenharLote();
+  pg.classList.remove('sai'); pg.classList.add('on'); pg.scrollTop = 0; document.body.style.overflow = 'hidden';
+
+  pg.oninput = (ev) => {
+    const k = ev.target.dataset.g, n = ev.target.dataset.n;
+    if (k) {
+      g[k] = k === 'marca' || k === 'versao' ? ev.target.value : num(ev.target.value);
+      if (k === 'preco') pg.querySelectorAll('[data-n="preco"]').forEach((x) => (x.placeholder = g.preco ? 'Preço ' + fmtNum(g.preco) : 'Preço'));
+    }
+    if (ev.target.dataset.gq !== undefined) {
+      const sc = ev.target.dataset.gq === 'g' ? 'g' : +ev.target.dataset.gq;
+      gradeDe(sc)[ev.target.dataset.t] = Math.min(999, Math.max(0, parseInt(ev.target.value) || 0));
+      if (sc === 'g') { $('#lGradeTot', pg).textContent = totTxt(); atualizarResumos(); }
+      return;
+    }
+    if (n) {
+      const it = itens[+ev.target.closest('.lote-it').dataset.i];
+      it[n] = n === 'preco' ? num(ev.target.value) : ev.target.value;
+      if (n === 'time') ev.target.closest('.lote-it').querySelector('[data-n="nome"]').placeholder = sugestao(it) || 'Nome da peça';
+    }
+  };
+  pg.onchange = async (ev) => {
+    if (ev.target.id !== 'lFile') return;
+    const files = [...ev.target.files].slice(0, 40 - itens.length);
+    ev.target.value = '';
+    if (!files.length) return toast('Até 40 peças por vez');
+    for (const [k, file] of files.entries()) {
+      toast(`Preparando foto ${k + 1} de ${files.length}…`);
+      try { itens.push({ fotos: [{ full: await comprimir(file, 1200, 0.8), thumb: await comprimir(file, 600, 0.72) }], nome: '', time: '', preco: 0, grade: null }); }
+      catch { toast('Não deu para ler uma das fotos'); }
+      redesenharItens();
+    }
+    desenharLote();
+  };
+  pg.onclick = async (ev) => {
+    const b = ev.target.closest('button');
+    if (!b || salvando) return;
+    const d = b.dataset;
+    if (d.cat) {
+      if (g.categoria === d.cat) return;
+      g.categoria = d.cat; g.grade = {}; itens.forEach((it) => (it.grade = null));
+      pg.querySelectorAll('#lCat button').forEach((x) => x.classList.toggle('on', x.dataset.cat === d.cat));
+      $('#lVersaoW', pg).hidden = d.cat !== 'camisa';
+      redesenharGrade(); redesenharItens(); return;
+    }
+    const sc = (v) => (v === 'g' ? 'g' : +v);
+    if (d.gadd !== undefined) { gradeDe(sc(d.gadd))[d.t] = 1; redesenharGrade(sc(d.gadd)); return; }
+    if (d.grm !== undefined) { delete gradeDe(sc(d.grm))[d.t]; redesenharGrade(sc(d.grm)); return; }
+    if (d.gs !== undefined) { const gr = gradeDe(sc(d.gs)); gr[d.t] = Math.min(999, Math.max(0, (gr[d.t] || 0) + +d.d)); redesenharGrade(sc(d.gs)); return; }
+    if (d.mudar !== undefined) { itens[+d.mudar].grade = { ...g.grade }; redesenharItens(); return; }
+    if (d.padrao !== undefined) { itens[+d.padrao].grade = null; redesenharItens(); return; }
+    if (d.juntar) { const i = +d.juntar; itens[i - 1].fotos.push(...itens[i].fotos.slice(0, 6 - itens[i - 1].fotos.length)); itens.splice(i, 1); redesenharItens(); return; }
+    if (d.tirar) { itens.splice(+d.tirar, 1); redesenharItens(); return; }
+    const x = d.x;
+    if (x === 'gradeCheia') { const padrao = g.categoria === 'camisa' ? ['P', 'M', 'G', 'GG'] : ['38', '39', '40', '41', '42', '43']; g.grade = Object.fromEntries(padrao.map((t) => [t, 1])); redesenharGrade(); return; }
+    if (x === 'gradeZera') { g.grade = {}; redesenharGrade(); return; }
+    if (x === 'fechar') { if (itens.length && !confirm('Sair sem salvar? As fotos escolhidas se perdem.')) return; return fecharPagina(); }
+    if (x !== 'salvar') return;
+
+    // confere antes de salvar qualquer coisa
+    const semNome = itens.findIndex((it) => !(it.nome.trim() || sugestao(it)));
+    if (semNome >= 0) { toast(`Falta o nome da peça ${semNome + 1}`); return pg.querySelector(`.lote-it[data-i="${semNome}"] [data-n="nome"]`)?.focus(); }
+    const semPreco = itens.findIndex((it) => !(it.preco || g.preco));
+    if (semPreco >= 0) return toast(g.preco ? `Falta o preço da peça ${semPreco + 1}` : 'Coloque o preço lá em cima (vale para todas)');
+    const semGrade = itens.findIndex((it) => !somaGrade(it.grade || g.grade));
+    if (semGrade >= 0) return toast(it0(semGrade));
+
+    salvando = true; lembrar();
+    const variacoesDe = (gr) => TAMANHOS[g.categoria].filter((t) => gr[t] > 0).map((t) => ({ tam: t, qtd: gr[t] }));
+    let ok = 0;
+    for (let i = 0; i < itens.length; ) {
+      const it = itens[i];
+      b.disabled = true; b.textContent = `Salvando ${ok + 1} de ${ok + itens.length}…`;
+      try {
+        await api.salvarProduto({
+          dados: { nome: it.nome.trim() || sugestao(it), categoria: g.categoria, versao: g.categoria === 'camisa' ? g.versao : '', time: it.time.trim(), marca: g.marca.trim(), descricao: '', preco: it.preco || g.preco, promo: null, variacoes: variacoesDe(it.grade || g.grade), visivel: true, destaque: false, esgotadoManual: false },
+          custo: g.custo, fotos: it.fotos
+        });
+        itens.splice(i, 1); ok++;
+      } catch (err) { console.error(err); i++; }
+    }
+    salvando = false;
+    await carregar();
+    if (!itens.length) { fecharPagina(); desenhar(); return toast(`${ok} ${ok === 1 ? 'produto salvo' : 'produtos salvos'}`); }
+    redesenharItens();
+    toast(`${ok} salvos. ${itens.length} não salvaram: tente de novo.`);
+  };
+}
+
 /* ---------- editor de produto ---------- */
-async function editor(id) {
+// base: cadastrar parecido (copia tudo menos nome, time, fotos e descrição)
+async function editor(id, base = null) {
   const orig = id ? S.produtos.find((p) => p.id === id) : null;
   const e = orig
     ? { ...orig, variacoes: orig.variacoes.map((v) => ({ ...v })), custo: custoDe(id), fotos: [{ id: orig.fotoIds?.[0], full: orig.thumb, thumb: orig.thumb }] }
-    : { nome: '', categoria: 'camisa', time: '', marca: '', descricao: '', preco: 0, promo: null, custo: 0, variacoes: [], fotos: [], visivel: true, destaque: false, esgotadoManual: false };
+    : base
+      ? { nome: '', categoria: base.categoria, versao: base.versao || '', time: '', marca: base.marca || '', descricao: '', preco: base.preco, promo: base.promo || null, custo: custoDe(base.id), variacoes: base.variacoes.map((v) => ({ tam: v.tam, qtd: Math.max(1, v.qtd) })), fotos: [], visivel: true, destaque: false, esgotadoManual: false }
+      : { nome: '', categoria: 'camisa', time: '', marca: '', descricao: '', preco: 0, promo: null, custo: 0, variacoes: [], fotos: [], visivel: true, destaque: false, esgotadoManual: false };
   if (!orig) e.fotos = [];
   const pg = $('#pagina');
   const times = [...new Set(S.produtos.map((p) => p.time).filter(Boolean))].sort();
   const marcas = [...new Set(S.produtos.map((p) => p.marca).filter(Boolean))].sort();
 
   const html = () => `
-    <div class="pg-top"><button class="icon-btn" data-x="fechar" aria-label="Fechar">${ico('fechar')}</button><b>${orig ? 'Editar produto' : 'Novo produto'}</b><span style="width:44px"></span></div>
+    <div class="pg-top"><button class="icon-btn" data-x="fechar" aria-label="Fechar">${ico('fechar')}</button><b>${orig ? 'Editar produto' : base ? 'Produto parecido' : 'Novo produto'}</b><span style="width:44px"></span></div>
     <div class="cnt">
+      ${orig ? `<button class="btn sec" data-x="parecido" style="margin-bottom:14px">${ico('copiar', 18)} Cadastrar outro parecido</button>` : ''}
+      ${base ? `<p class="muted" style="font-size:14px;margin-bottom:12px">Copiei categoria, marca, preço, custo e tamanhos de "${esc(base.nome)}". Coloque a foto e o nome.</p>` : ''}
       <div class="campo"><span>Fotos</span><div class="fotos" id="eFotos">${fotosHtml()}</div></div>
       <label class="campo"><span>Nome</span><input class="in" data-k="nome" value="${esc(e.nome)}" placeholder="Ex.: Camisa Flamengo I 25/26"></label>
       <div class="campo"><span>Categoria</span><div class="seg" id="eCat">${CATEGORIAS.map((c) => `<button class="${e.categoria === c.id ? 'on' : ''}" data-cat="${c.id}">${c.nome}</button>`).join('')}</div></div>
       <div class="dupla">
         <label class="campo"><span>Time</span><input class="in" data-k="time" value="${esc(e.time)}" list="dlTimes" placeholder="Opcional"></label>
         <label class="campo"><span>Marca</span><input class="in" data-k="marca" value="${esc(e.marca)}" list="dlMarcas"></label>
+      </div>
+      <div class="dupla" id="eLigaW" ${e.categoria === 'camisa' ? '' : 'hidden'}>
+        <label class="campo"><span>Liga</span><select class="in" data-k="liga" id="eLiga">${ligaOpts()}</select></label>
+        <label class="campo"><span>Versão</span><select class="in" data-k="versao">${['', ...VERSOES].map((x) => `<option value="${x}" ${(e.versao || '') === x ? 'selected' : ''}>${x || 'Não informar'}</option>`).join('')}</select></label>
       </div>
       <datalist id="dlTimes">${times.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
       <datalist id="dlMarcas">${marcas.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
@@ -391,6 +591,10 @@ async function editor(id) {
       <div class="cta" style="margin:20px -16px 0"><button class="btn" data-x="salvar">Salvar</button></div>
     </div>`;
 
+  function ligaOpts() {
+    const auto = ligaAuto(e.time, e.nome);
+    return ['', ...LIGAS].map((l) => `<option value="${esc(l)}" ${(e.liga || '') === l ? 'selected' : ''}>${l ? esc(l) : `Automática${auto ? ` (${esc(auto)})` : e.time ? ' (Outras)' : ''}`}</option>`).join('');
+  }
   function fotosHtml() {
     return e.fotos.map((f, i) => `<div class="foto" data-i="${i}"><img src="${f.thumb}" alt="">${i === 0 ? '<span class="capa">Capa</span>' : ''}<button class="x" data-rm="${i}" aria-label="Remover foto">${ico('fechar', 14)}</button></div>`).join('') +
       (e.fotos.length < 6 ? `<label class="foto add">${ico('camera', 24)}<input type="file" accept="image/*" multiple id="eFile"></label>` : '');
@@ -413,7 +617,7 @@ async function editor(id) {
   }
 
   pg.innerHTML = html();
-  pg.classList.add('on'); pg.scrollTop = 0; document.body.style.overflow = 'hidden';
+  pg.classList.remove('sai'); pg.classList.add('on'); pg.scrollTop = 0; document.body.style.overflow = 'hidden';
   $('#eLucro', pg).innerHTML = lucroHtml();
   varsHtml();
 
@@ -425,6 +629,7 @@ async function editor(id) {
     if (k) {
       e[k] = ['custo', 'preco', 'promo'].includes(k) ? num(ev.target.value) || (k === 'promo' ? null : 0) : ev.target.value;
       if (['custo', 'preco', 'promo'].includes(k)) $('#eLucro', pg).innerHTML = lucroHtml();
+      if (k === 'time' || k === 'nome') $('#eLiga', pg).options[0].textContent = ligaOpts().match(/>([^<]*)<\/option>/)[1].replace(/&amp;/g, '&');
     }
     if (q !== undefined) e.variacoes[q].qtd = Math.max(0, parseInt(ev.target.value) || 0);
   };
@@ -451,6 +656,7 @@ async function editor(id) {
       if (e.categoria !== d.cat) e.variacoes = [];
       e.categoria = d.cat;
       pg.querySelectorAll('#eCat button').forEach((b) => b.classList.toggle('on', b.dataset.cat === d.cat));
+      $('#eLigaW', pg).hidden = d.cat !== 'camisa';
       varsHtml(); return;
     }
     if (d.st !== undefined) { const v = e.variacoes[+d.st]; v.qtd = Math.max(0, v.qtd + +d.d); varsHtml(); return; }
@@ -462,6 +668,7 @@ async function editor(id) {
     }
     const x = d.x;
     if (x === 'fechar') fecharPagina();
+    else if (x === 'parecido') editor(null, orig);
     else if (x === 'link') copiar(linkProduto(orig.id), 'Link do produto copiado');
     else if (x === 'divulgar') copiar(msgDivulgar({ ...orig, ...e }), 'Mensagem copiada. É só colar no WhatsApp.');
     else if (x === 'venda') { fecharPagina(); formMov('venda', orig.id); }
@@ -475,7 +682,7 @@ async function editor(id) {
       t.disabled = true; t.textContent = 'Salvando…';
       try {
         const dados = {
-          nome: e.nome.trim(), categoria: e.categoria, time: e.time.trim(), marca: e.marca.trim(), descricao: e.descricao.trim(),
+          nome: e.nome.trim(), categoria: e.categoria, time: e.time.trim(), liga: e.categoria === 'camisa' ? e.liga || '' : '', versao: e.categoria === 'camisa' ? e.versao || '' : '', marca: e.marca.trim(), descricao: e.descricao.trim(),
           preco: e.preco, promo: e.promo && e.promo < e.preco ? e.promo : null, variacoes: e.variacoes,
           visivel: e.visivel !== false, destaque: !!e.destaque, esgotadoManual: !!e.esgotadoManual
         };
@@ -488,9 +695,16 @@ async function editor(id) {
     }
   };
 }
+// fecha a página com a animação de descida; depois() roda quando ela some
+function fecharAnimado(pg, depois) {
+  pg.classList.remove('on'); pg.classList.add('sai');
+  setTimeout(() => { if (pg.classList.contains('sai')) { pg.classList.remove('sai'); depois?.(); } }, 260);
+}
 function fecharPagina() {
   const pg = $('#pagina');
-  pg.classList.remove('on'); pg.innerHTML = ''; document.body.style.overflow = '';
+  document.body.style.overflow = '';
+  if (!pg.classList.contains('on')) { pg.innerHTML = ''; return; }
+  fecharAnimado(pg, () => (pg.innerHTML = ''));
 }
 
 function msgDivulgar(p) {
@@ -628,10 +842,38 @@ function formMov(tipo = 'venda', produtoId = '') {
 }
 
 /* ---------- loja ---------- */
+// times e ligas que têm produto, para escolher a campanha
+function alvosCampanha(atual = '') {
+  const times = [...new Set(S.produtos.map((p) => p.time).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const ligas = LIGAS.filter((l) => S.produtos.some((p) => ligaDe(p) === l));
+  const op = (v, rot) => `<option value="${esc(v)}" ${atual === v ? 'selected' : ''}>${esc(rot)}</option>`;
+  return `${times.length ? `<optgroup label="Time">${times.map((t) => op('time:' + t, t)).join('')}</optgroup>` : ''}${ligas.length ? `<optgroup label="Liga">${ligas.map((l) => op('liga:' + l, l)).join('')}</optgroup>` : ''}`;
+}
+function cuponsHtml() {
+  if (!S.cupons.length) return '<p class="muted" style="font-size:14px;padding:4px 0 10px">Nenhum cupom criado ainda.</p>';
+  return S.cupons.map((k) => `
+    <div class="cupom-it ${k.ativo === false ? 'off' : ''}">
+      <b>${esc(k.codigo)}</b><span class="pct">${k.pct}% off</span>
+      <label class="sw mini" title="Ligado"><input type="checkbox" data-cupomliga="${esc(k.codigo)}" ${k.ativo === false ? '' : 'checked'}></label>
+      <button class="icon-btn" data-l="apagarCupom" data-cod="${esc(k.codigo)}" aria-label="Apagar cupom">${ico('lixo', 18)}</button>
+    </div>`).join('');
+}
 function telaLoja() {
   const c = S.loja;
+  const cpg = c.campanha || {};
+  const prog = c.progressivo || {};
+  const pers = persDe(c);
+  const bv = c.boasVindas || {};
   const r = S.rem || {};
   setTimeout(() => {
+    $('#listaCupons').addEventListener('change', async (ev) => {
+      const cod = ev.target.dataset.cupomliga;
+      if (!cod) return;
+      const k = S.cupons.find((x) => x.codigo === cod);
+      await api.salvarCupom({ ...k, ativo: ev.target.checked });
+      S.cupons = await api.cupons(); $('#listaCupons').innerHTML = cuponsHtml();
+      toast(ev.target.checked ? `Cupom ${cod} ligado` : `Cupom ${cod} desligado`);
+    });
     $('#rCep').addEventListener('change', async () => {
       if (soDigitos($('#rCep').value).length !== 8) return;
       const e = await buscarEndereco($('#rCep').value);
@@ -648,7 +890,16 @@ function telaLoja() {
         const v = (id) => $('#' + id).value.trim();
         const nova = { nome: v('cNome') || 'B13 Multimarcas', slogan: v('cSlogan'), whatsapp: v('cWhats').replace(/\D/g, ''), instagram: v('cInsta').replace('@', ''), cidade: v('cCidade'), estoqueMinimo: +v('cMin') || 2, diasParado: +v('cParado') || 30,
           cepOrigem: soDigitos(v('cCepOrigem')), retirada: $('#cRetirada').checked, enderecoRetirada: v('cEndRet'), entregaLocal: $('#cLocal').checked,
-          valorEntregaLocal: num(v('cValLocal')), cepsLocais: v('cCepsLocais'), freteGratisAcima: num(v('cGratis')), parcelasSemJuros: Math.min(12, Math.max(0, parseInt(v('cParcelas')) || 0)) };
+          valorEntregaLocal: num(v('cValLocal')), cepsLocais: v('cCepsLocais'), freteGratisAcima: num(v('cGratis')), parcelasSemJuros: Math.min(12, Math.max(0, parseInt(v('cParcelas')) || 0)),
+          pixDesconto: Math.min(30, Math.max(0, parseInt(v('cPix')) || 0)), parcelasMax: Math.min(12, Math.max(1, parseInt(v('cParcMax')) || 12)),
+          progressivo: { ativo: $('#cProgOn').checked, faixas: [1, 2, 3].map((n) => ({ qtd: parseInt(v('cProgQ' + n)) || 0, pct: Math.min(50, parseInt(v('cProgP' + n)) || 0) })).filter((x) => x.qtd > 1 && x.pct > 0) },
+          pers: { ativo: $('#cPersOn').checked, preco: num(v('cPersPreco')), maxNome: Math.min(15, Math.max(4, parseInt(v('cPersMax')) || 12)) },
+          boasVindas: { ativo: $('#cBvOn').checked, cupom: $('#cBvCupom').value, titulo: v('cBvTitulo'), texto: v('cBvTexto') },
+          pixelMeta: soDigitos(v('cPixel')) };
+        if (nova.boasVindas.ativo && !nova.boasVindas.cupom) return toast('Escolha o cupom da primeira compra');
+        if (nova.progressivo.ativo && !nova.progressivo.faixas.length) return toast('Preencha pelo menos uma faixa do desconto progressivo');
+        nova.campanha = { ativa: $('#cpgAtiva').checked, alvo: $('#cpgAlvo').value, titulo: v('cpgTitulo'), texto: v('cpgTexto'), cupom: $('#cpgCupom').value };
+        if (nova.campanha.ativa && !nova.campanha.alvo) return toast('Escolha o time ou a liga da campanha');
         if (nova.whatsapp.length < 12) return toast('Coloque o WhatsApp com DDI e DDD, ex.: 5573999999999');
         if (nova.cepOrigem && nova.cepOrigem.length !== 8) return toast('O CEP de origem precisa ter 8 números');
         if (nova.entregaLocal && !soDigitos(nova.cepsLocais)) return toast('Diga o começo dos CEPs da cidade para a entrega própria');
@@ -663,6 +914,22 @@ function telaLoja() {
         }
         await api.salvarConfig(nova); toast('Dados da loja salvos'); recarregar();
       }
+      if (a === 'criarCupom') {
+        const codigo = codigoCupom($('#cpCod').value), pct = parseInt($('#cpPct').value);
+        if (codigo.length < 3) return toast('O código precisa ter pelo menos 3 letras ou números');
+        if (!(pct >= 1 && pct <= 90)) return toast('A porcentagem vai de 1 a 90');
+        if (S.cupons.some((k) => k.codigo === codigo) && !confirm(`O cupom ${codigo} já existe. Trocar para ${pct}%?`)) return;
+        try { await api.salvarCupom({ codigo, pct, ativo: true }); }
+        catch { return toast('Não deu para salvar. Atualize as regras do Firestore (README).'); }
+        S.cupons = await api.cupons(); $('#listaCupons').innerHTML = cuponsHtml(); $('#cpCod').value = ''; $('#cpPct').value = '';
+        return toast(`Cupom ${codigo} criado: ${pct}% de desconto`);
+      }
+      if (a === 'apagarCupom') {
+        if (!confirm(`Apagar o cupom ${b.dataset.cod}? Quem tentar usar vai ver "cupom inválido".`)) return;
+        await api.excluirCupom(b.dataset.cod); S.cupons = await api.cupons(); $('#listaCupons').innerHTML = cuponsHtml();
+        return toast('Cupom apagado');
+      }
+      if (a === 'copiarLeads') return copiar(S.leads.map((l) => `${l.nome || 'Sem nome'}\t${l.whats}\t${new Date(l.criadoEm).toLocaleDateString('pt-BR')}`).join('\n'), `${S.leads.length} contatos copiados. Cole numa planilha.`);
       if (a === 'sair') api.sair();
       if (a === 'reset' && confirm('Voltar os dados de exemplo? O que foi mexido na demonstração se perde.')) { await api.resetarDemo(); location.reload(); }
     });
@@ -716,7 +983,52 @@ function telaLoja() {
       </div>
       <h2 style="margin-top:28px">Pagamento online</h2>
       <p class="muted" style="font-size:14px;margin-bottom:10px">${pagamentoReal ? 'Ligado: o cliente paga com Pix ou cartão pela InfinitePay.' : 'Simulado por enquanto. Liga quando o servidor for configurado (servidor/LEIA-ME.md).'}</p>
+      <div class="dupla">
+        <label class="campo"><span>Desconto no Pix (%)</span><input class="in" id="cPix" inputmode="numeric" value="${Number(c.pixDesconto) || ''}" placeholder="Ex.: 5"></label>
+        <label class="campo"><span>Parcelas no cartão (máx.)</span><input class="in" id="cParcMax" inputmode="numeric" value="${Number(c.parcelasMax) || 12}"></label>
+      </div>
+      <p class="muted" style="font-size:12px;margin:-4px 0 12px">O site mostra "R$ X no Pix" e "ou R$ Y em até 12x" em todos os produtos. 0 = sem desconto no Pix.</p>
       <label class="campo"><span>Parcelas sem juros para o cliente</span><input class="in" id="cParcelas" inputmode="numeric" value="${Number(c.parcelasSemJuros) || 0}" placeholder="0"><small class="muted" style="font-size:12px">A loja paga a taxa dessas parcelas. Precisa da chave de API da InfinitePay. 0 = o cliente paga os juros.</small></label>
+      <h2 style="margin-top:28px">Desconto progressivo</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">Quanto mais peças, mais desconto. Não soma com cupom: vale o maior.</p>
+      <label class="sw"><span>Desconto progressivo ligado</span><input type="checkbox" id="cProgOn" ${prog.ativo ? 'checked' : ''}></label>
+      ${[1, 2, 3].map((n) => { const fx = prog.faixas?.[n - 1] || {}; return `<div class="faixa-prog"><span>Levando</span><input class="in" id="cProgQ${n}" inputmode="numeric" value="${fx.qtd || ''}" placeholder="${n + 1}"><span>peças ou mais:</span><input class="in" id="cProgP${n}" inputmode="numeric" value="${fx.pct || ''}" placeholder="${n * 5}"><span>%</span></div>`; }).join('')}
+
+      <h2 style="margin-top:28px">Personalização (nome e número)</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">Quando ligada, toda camisa ganha a opção de personalizar. O pedido chega com o nome e o número para você mandar fazer.</p>
+      <label class="sw"><span>Personalização ligada</span><input type="checkbox" id="cPersOn" ${pers.ativo ? 'checked' : ''}></label>
+      <div class="dupla">
+        <label class="campo"><span>Preço da personalização</span><input class="in" id="cPersPreco" inputmode="decimal" value="${fmtNum(Number(pers.preco) || 0)}" placeholder="30,00"></label>
+        <label class="campo"><span>Letras no nome (máx.)</span><input class="in" id="cPersMax" inputmode="numeric" value="${pers.maxNome}"></label>
+      </div>
+
+      <h2 style="margin-top:28px">Cupom de primeira compra</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">Uma janela aparece uma vez para quem entra no site: a pessoa deixa o WhatsApp e ganha o cupom. Crie o cupom antes, aqui embaixo em "Cupons de desconto".</p>
+      <label class="sw"><span>Janela de primeira compra ligada</span><input type="checkbox" id="cBvOn" ${bv.ativo ? 'checked' : ''}></label>
+      <label class="campo"><span>Cupom que a pessoa ganha</span><select class="in" id="cBvCupom"><option value="">Escolha…</option>${S.cupons.filter((k) => k.ativo !== false).map((k) => `<option value="${esc(k.codigo)}" ${bv.cupom === k.codigo ? 'selected' : ''}>${esc(k.codigo)} · ${k.pct}%</option>`).join('')}</select></label>
+      <label class="campo"><span>Título da janela</span><input class="in" id="cBvTitulo" value="${esc(bv.titulo || '')}" placeholder="Ex.: Ganhe 10% na primeira compra"></label>
+      <label class="campo"><span>Frase</span><input class="in" id="cBvTexto" value="${esc(bv.texto || '')}" placeholder="Ex.: Deixe seu WhatsApp e receba o cupom agora."></label>
+      <div class="kpi" style="display:flex;align-items:center;gap:12px;margin-top:6px"><div style="flex:1"><span>Contatos recebidos</span><b style="font-size:22px">${S.leads.length}</b></div>${S.leads.length ? `<button class="btn sec mini" data-l="copiarLeads" style="width:auto;padding:0 16px">${ico('copiar', 16)} Copiar lista</button>` : ''}</div>
+
+      <h2 style="margin-top:28px">Meta Pixel (anúncios)</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">Com o ID do Pixel, o site avisa o Meta de cada visita, sacola, checkout e compra. Assim os anúncios aprendem quem compra.</p>
+      <label class="campo"><span>ID do Pixel</span><input class="in" id="cPixel" inputmode="numeric" value="${esc(c.pixelMeta || '')}" placeholder="Só números, ex.: 123456789012345"></label>
+
+      <h2 style="margin-top:28px">Campanha da vitrine</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">Escolha um time ou uma liga para empurrar. O site abre com um banner dela e mostra essas peças primeiro.</p>
+      <label class="sw"><span>Campanha ligada</span><input type="checkbox" id="cpgAtiva" ${cpg.ativa ? 'checked' : ''}></label>
+      <label class="campo"><span>Destacar</span><select class="in" id="cpgAlvo"><option value="">Escolha…</option>${alvosCampanha(cpg.alvo)}</select></label>
+      <label class="campo"><span>Título do banner</span><input class="in" id="cpgTitulo" value="${esc(cpg.titulo || '')}" placeholder="Ex.: Semana do Flamengo"></label>
+      <label class="campo"><span>Frase</span><input class="in" id="cpgTexto" value="${esc(cpg.texto || '')}" placeholder="Ex.: Todas as camisas com 15% off"></label>
+      <label class="campo"><span>Cupom no banner (opcional)</span><select class="in" id="cpgCupom"><option value="">Sem cupom</option>${S.cupons.filter((k) => k.ativo !== false).map((k) => `<option value="${esc(k.codigo)}" ${cpg.cupom === k.codigo ? 'selected' : ''}>${esc(k.codigo)} · ${k.pct}%</option>`).join('')}</select></label>
+      <h2 style="margin-top:28px">Cupons de desconto</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">O cliente digita o cupom na hora de pagar. O desconto vale sobre os produtos (o frete não entra).</p>
+      <div id="listaCupons">${cuponsHtml()}</div>
+      <div class="cupom-novo">
+        <input class="in" id="cpCod" placeholder="Código, ex.: FLA15" autocapitalize="characters" autocomplete="off">
+        <div class="cupom-pct"><input class="in" id="cpPct" inputmode="numeric" placeholder="10"><span>%</span></div>
+        <button class="btn mini" data-l="criarCupom">Criar</button>
+      </div>
       <h2 style="margin-top:28px">Alertas</h2>
       <div class="dupla">
         <label class="campo"><span>Estoque baixo abaixo de</span><input class="in" id="cMin" inputmode="numeric" value="${c.estoqueMinimo}"></label>

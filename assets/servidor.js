@@ -1,6 +1,6 @@
 // Frete e pagamento: fala com o servidor (servidor/worker.js) ou simula tudo no modo demonstração.
 import { SERVIDOR_URL } from './config.js';
-import { modo, opcoesLocais, precoAtual, soDigitos } from './data.js';
+import { modo, opcoesLocais, precoAtual, soDigitos, codigoCupom, calcularPedido, persDe } from './data.js';
 
 export const real = !!SERVIDOR_URL && modo === 'firebase';
 
@@ -16,7 +16,12 @@ const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function criar(api, loja, produtos) {
   const porId = (id) => produtos.find((p) => p.id === id);
-  const linhas = (itens) => itens.map((i) => { const p = porId(i.id); return { id: p.id, nome: p.nome, categoria: p.categoria, tam: i.tam, qtd: i.qtd, preco: precoAtual(p) }; });
+  // preço da linha já com a personalização (mesma regra do servidor)
+  const linhas = (itens) => itens.map((i) => {
+    const p = porId(i.id);
+    const extra = i.pers ? Number(persDe(loja).preco) || 0 : 0;
+    return { id: p.id, nome: p.nome, categoria: p.categoria, tam: i.tam, qtd: i.qtd, preco: Math.round((precoAtual(p) + extra) * 100) / 100, ...(i.pers ? { pers: i.pers } : {}) };
+  });
 
   // ---------- simulação ----------
   function cotarDemo(cep, itens) {
@@ -45,6 +50,17 @@ export function criar(api, loja, produtos) {
       return cotarDemo(cep, itens);
     },
 
+    // confere o cupom: devolve { codigo, pct } ou dá erro
+    async cupom(codigo) {
+      codigo = codigoCupom(codigo);
+      if (!codigo) throw new Error('Digite o cupom');
+      if (real) return chamar('/cupom', { codigo });
+      await espera(300);
+      const c = (await api.cupons()).find((x) => x.codigo === codigo);
+      if (!c || c.ativo === false) throw new Error('Cupom inválido ou encerrado');
+      return { codigo, pct: c.pct };
+    },
+
     // devolve { pedido, url }: url é a página de pagamento da InfinitePay (ou a simulação)
     async pagar(dados) {
       if (real) return chamar('/pagar', dados);
@@ -52,13 +68,18 @@ export function criar(api, loja, produtos) {
       const { opcoes, subtotal } = cotarDemo(soDigitos(dados.cep), dados.itens);
       const frete = opcoes.find((o) => o.id === dados.freteId);
       if (!frete) throw new Error('Escolha a entrega');
+      const cupom = dados.cupom ? await this.cupom(dados.cupom) : null;
+      const metodo = dados.metodo === 'pix' ? 'pix' : 'cartao';
+      const conta = calcularPedido(loja, linhas(dados.itens), cupom, metodo);
+      const itens = conta.itens.map(({ id, nome, tam, qtd, final, cheio, pers }) => ({ id, nome, tam, qtd, preco: final, cheio, ...(pers ? { pers } : {}) }));
       const id = 'B13-' + Date.now().toString(36).toUpperCase().slice(-6);
       const tel = soDigitos(dados.cliente.telefone);
       await api.salvarPedido({
         id, criadoEm: Date.now(), status: 'aguardando',
-        itens: linhas(dados.itens).map(({ id, nome, tam, qtd, preco }) => ({ id, nome, tam, qtd, preco })),
-        subtotal, frete: { id: frete.id, tipo: frete.tipo, servicoId: frete.servicoId || null, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
-        total: Math.round((subtotal + frete.preco) * 100) / 100,
+        itens, subtotal: conta.bruto, metodo,
+        ...(conta.regra ? { regra: conta.regra, desconto: conta.desconto } : {}), ...(conta.cupom ? { cupom: conta.cupom } : {}),
+        ...(conta.descontoPix ? { descontoPix: conta.descontoPix } : {}), frete: { id: frete.id, tipo: frete.tipo, servicoId: frete.servicoId || null, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
+        total: Math.round((conta.total + frete.preco) * 100) / 100,
         cliente: { nome: dados.cliente.nome.trim(), telefone: tel.length <= 11 ? '55' + tel : tel, ...(dados.cliente.cpf ? { cpf: soDigitos(dados.cliente.cpf) } : {}) },
         endereco: frete.tipo === 'retirada' ? null : { cep: soDigitos(dados.cep), ...dados.endereco }, pagamento: {}
       });
@@ -78,7 +99,7 @@ export function criar(api, loja, produtos) {
         Object.assign(p, { status: 'pago', pagoEm: Date.now(), pagamento: { metodo: q.capture_method || 'pix', parcelas: 1, recibo: '' } });
         await api.atualizarPedido(p.id, { status: p.status, pagoEm: p.pagoEm, pagamento: p.pagamento });
       }
-      return { pedido: p.id, status: p.status, pago: ['pago', 'enviado', 'entregue'].includes(p.status), itens: p.itens, subtotal: p.subtotal, frete: p.frete, total: p.total, recibo: p.pagamento?.recibo || '', metodo: p.pagamento?.metodo || '' };
+      return { pedido: p.id, status: p.status, pago: ['pago', 'enviado', 'entregue'].includes(p.status), itens: p.itens, subtotal: p.subtotal, cupom: p.cupom || null, regra: p.regra || '', desconto: p.desconto || 0, descontoPix: p.descontoPix || 0, frete: p.frete, total: p.total, recibo: p.pagamento?.recibo || '', metodo: p.pagamento?.metodo || '' };
     }
   };
 }

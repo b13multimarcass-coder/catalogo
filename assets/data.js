@@ -54,6 +54,7 @@ function demoApi() {
     if (!p) return;
     const v = p.variacoes.find((x) => x.tam === m.tam);
     if (v) v.qtd += sinal(m.tipo) * m.qtd;
+    if (m.tipo === 'venda') p.vendidos = Math.max(0, (p.vendidos || 0) + m.qtd);
   }
 
   return {
@@ -112,6 +113,12 @@ function demoApi() {
     async salvarPedido(p) { s.pedidos = s.pedidos.filter((x) => x.id !== p.id).concat(p); salvar(); },
     async atualizarPedido(id, campos) { const p = s.pedidos.find((x) => x.id === id); if (p) Object.assign(p, campos); salvar(); },
     async remetente() { return s.remetente || {}; },
+    async salvarLead(l) { s.leads = [...(s.leads || []), { id: novoId('l'), ...l }]; salvar(); },
+    async leads() { return [...(s.leads || [])].sort((a, b) => b.criadoEm - a.criadoEm); },
+    async excluirLead(id) { s.leads = (s.leads || []).filter((x) => x.id !== id); salvar(); },
+    async cupons() { return Object.values(s.cupons || {}).sort((a, b) => a.codigo.localeCompare(b.codigo)); },
+    async salvarCupom(c) { s.cupons = { ...(s.cupons || {}), [c.codigo]: c }; salvar(); },
+    async excluirCupom(codigo) { delete (s.cupons || {})[codigo]; salvar(); },
     async salvarRemetente(r) { s.remetente = r; salvar(); },
     async token() { return 'demo'; },
     async resetarDemo() { localStorage.removeItem(KEY); }
@@ -193,7 +200,8 @@ async function firebaseApi() {
         if (snap.exists()) {
           const variacoes = snap.data().variacoes.map((v) =>
             v.tam === m.tam ? { ...v, qtd: v.qtd + sinal(m.tipo) * m.qtd * (inverter ? -1 : 1) } : v);
-          t.update(ref, { variacoes });
+          const extra = m.tipo === 'venda' ? { vendidos: Math.max(0, (snap.data().vendidos || 0) + m.qtd * (inverter ? -1 : 1)) } : {};
+          t.update(ref, { variacoes, ...extra });
         }
         if (inverter) t.delete(doc(db, 'movimentos', m.id));
         else t.set(doc(collection(db, 'movimentos')), m);
@@ -208,6 +216,14 @@ async function firebaseApi() {
     async atualizarPedido(id, campos) { await setDoc(doc(db, 'pedidos', id), campos, { merge: true }); },
     // dados de quem envia (vão na etiqueta). Ficam em interno/, que só o lojista lê.
     async remetente() { const d = await getDoc(doc(db, 'interno', 'remetente')); return d.exists() ? d.data() : {}; },
+    // contatos do cupom de primeira compra: o cliente só cria; o lojista lê
+    async salvarLead(l) { await setDoc(doc(collection(db, 'leads')), l); },
+    async leads() { return (await lista('leads')).sort((a, b) => b.criadoEm - a.criadoEm); },
+    async excluirLead(id) { await deleteDoc(doc(db, 'leads', id)); },
+    // cupons: só o lojista lê a lista; o cliente confere um código pelo servidor (/cupom)
+    async cupons() { return (await lista('cupons')).map((c) => ({ ...c, codigo: c.id })).sort((a, b) => a.codigo.localeCompare(b.codigo)); },
+    async salvarCupom(c) { await setDoc(doc(db, 'cupons', c.codigo), { pct: c.pct, ativo: c.ativo !== false, criadoEm: c.criadoEm || Date.now() }); },
+    async excluirCupom(codigo) { await deleteDoc(doc(db, 'cupons', codigo)); },
     async salvarRemetente(r) { await setDoc(doc(db, 'interno', 'remetente'), r); },
     async token() { return auth.currentUser?.getIdToken(); }
   };
@@ -232,6 +248,30 @@ export function cpfValido(c) {
   const dv = (n) => { let s = 0; for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
   return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
 }
+// Regras de preço do pedido. A MESMA função está em assets/data.js e em servidor/worker.js: mude nos dois.
+// linhas: [{ preco (já com promoção e personalização), qtd }]. Ordem: maior entre cupom e desconto
+// progressivo (não somam) e, por cima, o desconto do Pix.
+export function faixaProgressiva(cfg, pecas) {
+  const p = cfg.progressivo;
+  if (!p?.ativo) return null;
+  return (p.faixas || []).filter((f) => f.qtd > 1 && f.pct > 0 && pecas >= f.qtd).sort((a, b) => b.pct - a.pct)[0] || null;
+}
+export function calcularPedido(cfg, linhas, cupom, metodo) {
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const pecas = linhas.reduce((t, l) => t + l.qtd, 0);
+  const faixa = faixaProgressiva(cfg, pecas);
+  const pctCupom = Number(cupom?.pct) || 0, pctFaixa = Number(faixa?.pct) || 0;
+  const pct = Math.max(pctCupom, pctFaixa);
+  const regra = !pct ? '' : pctCupom >= pctFaixa ? 'cupom' : 'progressivo';
+  const pix = metodo === 'pix' ? Math.min(30, Math.max(0, Number(cfg.pixDesconto) || 0)) : 0;
+  const itens = linhas.map((l) => ({ ...l, cheio: r2(l.preco), semPix: Math.round(l.preco * (100 - pct)) / 100, final: Math.round(l.preco * (100 - pct) * (100 - pix) / 100) / 100 }));
+  const soma = (k) => r2(itens.reduce((t, i) => t + i[k] * i.qtd, 0));
+  const bruto = soma('cheio'), aposDesc = soma('semPix'), total = soma('final');
+  return { itens, pecas, bruto, pct, regra, faixa, cupom: regra === 'cupom' ? cupom : null, desconto: r2(bruto - aposDesc), pix, descontoPix: r2(aposDesc - total), total };
+}
+export const persDe = (cfg) => ({ ativo: false, preco: 30, maxNome: 12, ...(cfg.pers || {}) });
+export const VERSOES = ['Torcedor', 'Jogador', 'Retrô', 'Feminina', 'Infantil'];
+export const codigoCupom = (t) => String(t || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 30);
 export const STATUS_PEDIDO = {
   aguardando: 'Aguardando pagamento', pago: 'Pago, a enviar', enviado: 'Enviado', entregue: 'Entregue', cancelado: 'Cancelado'
 };
@@ -244,6 +284,30 @@ export const CATEGORIAS = [
   { id: 'chuteira', nome: 'Chuteiras', um: 'Chuteira' },
   { id: 'tenis', nome: 'Tênis', um: 'Tênis' }
 ];
+// Liga: sai sozinha do time (ou do nome da camisa). O lojista pode trocar no produto (campo liga).
+export const LIGAS = ['Brasileirão', 'Seleções', 'Premier League', 'La Liga', 'Serie A', 'Bundesliga', 'Ligue 1', 'Sul-Americanos', 'Outras'];
+const TIMES_LIGA = {
+  'Brasileirão': ['flamengo', 'palmeiras', 'corinthians', 'sao paulo', 'santos', 'vasco', 'fluminense', 'botafogo', 'gremio', 'internacional', 'atletico mineiro', 'atletico-mg', 'atletico mg', 'galo', 'cruzeiro', 'bahia', 'vitoria', 'fortaleza', 'ceara', 'sport', 'sport recife', 'athletico', 'athletico-pr', 'athletico paranaense', 'coritiba', 'juventude', 'bragantino', 'red bull bragantino', 'mirassol', 'goias', 'nautico', 'santa cruz', 'remo', 'paysandu', 'chapecoense', 'america mineiro', 'avai', 'figueirense', 'ponte preta', 'guarani', 'cuiaba', 'criciuma', 'atletico goianiense', 'abc', 'crb', 'csa', 'confianca', 'sampaio correa'],
+  'Seleções': ['brasil', 'selecao brasileira', 'selecao', 'argentina', 'franca', 'alemanha', 'portugal', 'espanha', 'inglaterra', 'italia', 'holanda', 'uruguai', 'japao', 'mexico', 'estados unidos', 'eua', 'belgica', 'croacia', 'colombia', 'chile', 'paraguai', 'peru', 'equador', 'marrocos', 'nigeria', 'camaroes', 'senegal', 'coreia do sul', 'jamaica', 'escocia', 'irlanda', 'suica', 'dinamarca', 'suecia', 'noruega'],
+  'Premier League': ['manchester united', 'man united', 'manchester city', 'man city', 'liverpool', 'chelsea', 'arsenal', 'tottenham', 'newcastle', 'aston villa', 'west ham', 'everton', 'brighton', 'nottingham forest', 'wolves', 'fulham', 'crystal palace', 'leeds'],
+  'La Liga': ['real madrid', 'barcelona', 'barca', 'atletico de madrid', 'atletico madrid', 'sevilla', 'valencia', 'real betis', 'betis', 'villarreal', 'athletic bilbao', 'real sociedad', 'girona'],
+  'Serie A': ['juventus', 'milan', 'ac milan', 'inter de milao', 'inter milan', 'internazionale', 'napoli', 'roma', 'lazio', 'fiorentina', 'atalanta', 'bologna', 'torino'],
+  'Bundesliga': ['bayern', 'bayern de munique', 'borussia dortmund', 'dortmund', 'bayer leverkusen', 'leverkusen', 'rb leipzig', 'leipzig', 'schalke', 'wolfsburg', 'eintracht frankfurt'],
+  'Ligue 1': ['psg', 'paris saint-germain', 'paris saint germain', 'marseille', 'olympique de marseille', 'lyon', 'olympique lyonnais', 'monaco', 'lille', 'nice'],
+  'Sul-Americanos': ['boca juniors', 'boca', 'river plate', 'river', 'racing', 'independiente', 'san lorenzo', 'penarol', 'nacional', 'colo-colo', 'colo colo', 'universidad de chile', 'velez', 'estudiantes', 'olimpia', 'cerro porteno', 'ldu', 'atletico nacional', 'millonarios', 'alianza lima', 'universitario']
+};
+const semAcento = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const CHAVES_LIGA = Object.entries(TIMES_LIGA).flatMap(([liga, ts]) => ts.map((t) => [t, liga])).sort((a, b) => b[0].length - a[0].length);
+export function ligaAuto(time, nome = '') {
+  const tentar = (txt) => {
+    const t = ' ' + semAcento(txt).replace(/[^a-z0-9-]+/g, ' ') + ' ';
+    return CHAVES_LIGA.find(([k]) => t.includes(' ' + k + ' '))?.[1] || '';
+  };
+  return tentar(time) || tentar(nome);
+}
+// Só camisa tem liga. Sem time reconhecido e com time preenchido: "Outras".
+export const ligaDe = (p) => (p.categoria !== 'camisa' ? '' : p.liga || ligaAuto(p.time, p.nome) || (p.time ? 'Outras' : ''));
+
 export const TAMANHOS = {
   camisa: ['PP', 'P', 'M', 'G', 'GG', 'XG', 'XGG', 'Infantil 8', 'Infantil 10', 'Infantil 12', 'Infantil 14'],
   chuteira: ['33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45'],
@@ -271,6 +335,28 @@ export function comprimir(file, max, q) {
   });
 }
 
+// Pílula que desliza até a aba ativa. A barra é redesenhada a cada troca, então a pílula
+// nasce na posição antiga (guardada por chave) e anima até a nova.
+const pilulaAnt = {};
+export function moverPilula(barra, chave, folga = [0, 0]) {
+  if (!barra) return;
+  let p = barra.querySelector(':scope > .pilula');
+  if (!p) { p = document.createElement('span'); p.className = 'pilula'; p.setAttribute('aria-hidden', 'true'); barra.prepend(p); }
+  const on = barra.querySelector(':scope > .on');
+  if (!on) { p.style.opacity = 0; return; }
+  const [fx, fy] = folga;
+  const r = { x: on.offsetLeft + fx, y: on.offsetTop + fy, w: on.offsetWidth - 2 * fx, h: on.offsetHeight - 2 * fy };
+  const por = (q) => { p.style.transform = `translate(${q.x}px, ${q.y}px)`; p.style.width = q.w + 'px'; p.style.height = q.h + 'px'; };
+  const a = pilulaAnt[chave];
+  p.style.transition = 'none';
+  por(a || r);
+  p.style.opacity = 1;
+  p.getBoundingClientRect();
+  p.style.transition = '';
+  por(r);
+  pilulaAnt[chave] = r;
+}
+
 export const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export const ICO = {
@@ -282,6 +368,9 @@ export const ICO = {
   mais: '<path d="M12 5v14M5 12h14"/>',
   painel: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
   caixa: '<path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/>',
+  cadeado: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+  regua: '<path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
+  presente: '<rect x="3" y="8" width="18" height="13" rx="1"/><path d="M3 12h18M12 8v13"/><path d="M12 8C10 4 6 4 6 6.5S9 8 12 8zM12 8c2-4 6-4 6-1.5S15 8 12 8z"/>',
   setas: '<path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/>',
   loja: '<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9h16v2a3 3 0 01-6 0 3 3 0 01-4 0 3 3 0 01-6 0V9z"/><path d="M5 13v8h14v-8"/>',
   copiar: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/>',

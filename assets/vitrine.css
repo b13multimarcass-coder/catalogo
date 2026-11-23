@@ -208,3 +208,91 @@ body.vit .toast { bottom: calc(100px + env(safe-area-inset-bottom)); }
 .mini-i small { color: var(--tx2); }
 .mini-i.t { font-weight: 700; border: 0; font-size: 17px; }
 .fin .lnk { text-align: center; }
+
+/* menu da pílula abre crescendo do canto */
+.menu { transform-origin: top left; }
+.menu.on { animation: cai .26s var(--suave); }
+@keyframes cai { from { opacity: 0; transform: translateY(-8px) scale(.96); } }
+.ligas { padding-top: 0; margin-top: -4px; }
+
+/* cupom no checkout */
+.cupom-l input { text-transform: uppercase; }
+.cupom-l input::placeholder { text-transform: none; }
+.cupom-ok { display: flex; align-items: center; gap: 8px; background: #edf7ef; color: #1d6b35; border-radius: 12px; padding: 12px 14px; font-size: 15px; animation: entra .35s var(--suave); }
+.cupom-ok span { flex: 1; }
+.cupom-ok button { font-size: 14px; text-decoration: underline; color: #1d6b35; }
+.passo .l.desc { color: #1d6b35; font-weight: 600; }
+.abas .pilula { background: var(--cinza); }
+.abas button.on { background: none !important; }
+
+/* banner da campanha */
+.slide.camp { background: linear-gradient(150deg, var(--brand), #233372); color: #fff; display: flex; flex-direction: column; }
+.camp-fotos { flex: 1; position: relative; min-height: 0; }
+.camp-fotos img { position: absolute; top: 10%; width: 52%; height: auto; aspect-ratio: 1; object-fit: cover; border-radius: 14px; box-shadow: 0 14px 34px rgba(0,0,0,.3);
+  left: calc(8% + var(--i) * 20%); transform: rotate(calc(-7deg + var(--i) * 7deg)) translateY(calc(var(--i) * 6%)); z-index: calc(3 - var(--i)); animation: camp-entra .7s var(--suave) both; animation-delay: calc(.1s + var(--i) * .08s); }
+@keyframes camp-entra { from { opacity: 0; transform: translateY(30px) rotate(0deg); } }
+.camp-txt { padding: 0 22px 22px; position: relative; z-index: 4; }
+.camp-txt small { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; opacity: .8; }
+.camp-txt b { display: block; font-family: Anton, sans-serif; font-weight: 400; font-size: 34px; line-height: 1.05; text-transform: uppercase; margin-top: 2px; }
+.camp-txt p { margin-top: 6px; font-size: 16px; opacity: .92; }
+.camp-acoes { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.camp-acoes i { font-style: normal; background: #fff; color: var(--brand); font-weight: 600; border-radius: 999px; padding: 11px 20px; font-size: 15px; }
+.camp-cupom { border: 1.5px dashed rgba(255,255,255,.7); border-radius: 999px; padding: 8px 14px; font-size: 14px; }
+.camp-cupom b { display: inline; font-family: inherit; font-size: inherit; letter-spacing: .5px; text-transform: none; }
+
+/* preço no Pix e parcelas */
+.preco .nopix { font-size: .62em; font-weight: 500; color: var(--tx2); }
+.parc { font-size: 12.5px; color: var(--tx2); margin-top: 2px; line-height: 1.3; }
+.pd .parc { font-size: 15px; margin-top: 4px; }
+.tag.azul { color: var(--brand); }
+
+/* selo de pagamento seguro */
+.selo { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: #f4f6fb; color: var(--tx2); font-size: 14px; }
+.selo svg { color: var(--brand); flex: none; }
+.selo b { color: var(--tx); }
+
+/* barra de frete grátis e desconto progressivo */
+.frete-barra { margin: 0 0 14px; font-size: 14px; }
+.frete-barra span { display: flex; align-items: center; gap: 6px; }
+.frete-barra i { display: block; height: 6px; border-radius: 999px; background: var(--ln); margin-top: 8px; overflow: hidden; }
+.frete-barra em { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width .6s var(--suave); }
+.frete-barra.ok { color: #1d6b35; }
+.frete-barra.ok em { background: #2e9b52; }
+.prog { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: #fff6e6; color: #7a4b00; font-size: 14px; }
+.prog svg { flex: none; }
+.prog.mini { margin: 10px 0 0; display: inline-flex; }
+.resumo .l.desc, .resumo .l.pixl { color: #1d6b35; font-weight: 600; }
+
+/* ordenar */
+.chip.ordem { position: relative; gap: 6px; padding-right: 10px; }
+.chip.ordem select { appearance: none; -webkit-appearance: none; border: 0; background: none; font: inherit; color: inherit; padding-right: 2px; cursor: pointer; outline: none; }
+.chip.ordem.on select option { color: var(--tx); }
+
+/* produto: guia, últimas unidades, personalização */
+.sec-t { display: flex; justify-content: space-between; align-items: center; }
+.lnk-guia { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; color: var(--tx2); text-decoration: underline; font-weight: 400; }
+.tam { position: relative; }
+.tam .ult { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--promo); }
+.restam { color: var(--promo); font-size: 14px; font-weight: 600; min-height: 0; margin-top: 8px; }
+.restam:empty { display: none; }
+.pers { margin-top: 18px; border: 1px solid var(--ln); border-radius: 14px; padding: 4px 14px 14px; }
+.pers .sw { border: 0; }
+.pers-prev { height: 120px; border-radius: 12px; background: linear-gradient(160deg, #222, #444); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 12px; font-family: Anton, sans-serif; text-transform: uppercase; }
+.pers-prev b { font-weight: 400; font-size: 20px; letter-spacing: 2px; }
+.pers-prev span { font-size: 54px; line-height: 1; }
+table.guia { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.guia th { text-align: left; font-weight: 600; color: var(--tx2); font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--ln); }
+table.guia td { padding: 11px 0; border-bottom: 1px solid var(--ln); }
+table.guia td:first-child { font-weight: 700; }
+
+/* forma de pagamento */
+.metodos { margin-top: 14px; }
+
+/* cupom de primeira compra */
+.bv { text-align: center; padding-bottom: 26px; }
+.bv-ic { width: 72px; height: 72px; border-radius: 50%; background: #eef1fb; color: var(--brand); display: grid; place-items: center; margin: 0 auto 14px; }
+.bv h2 { font-size: 24px; line-height: 1.15; margin-bottom: 8px; }
+.bv p { color: var(--tx2); margin-bottom: 14px; }
+.bv .cmp { text-align: left; }
+.bv-cod { display: block; width: 100%; border: 2px dashed var(--brand); border-radius: 14px; padding: 16px; font-size: 28px; font-weight: 700; letter-spacing: 2px; color: var(--brand); }
+.bv-cod small { display: block; font-size: 12px; font-weight: 400; letter-spacing: 0; color: var(--tx2); margin-top: 2px; }

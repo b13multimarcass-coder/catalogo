@@ -17,6 +17,16 @@ service cloud.firestore {
     match /movimentos/{id} { allow read, write: if admin(); }
     // dados do remetente da etiqueta (CPF/CNPJ, endereço)
     match /interno/{doc}   { allow read, write: if admin(); }
+    // cupons de desconto: só o lojista vê a lista; o cliente confere um código pelo servidor
+    match /cupons/{id}     { allow read, write: if admin(); }
+    // contatos do cupom de primeira compra: o visitante só cria (nome, WhatsApp, data); o lojista lê e apaga
+    match /leads/{id} {
+      allow read, delete: if admin();
+      allow create: if request.resource.data.keys().hasOnly(['nome', 'whats', 'criadoEm'])
+        && request.resource.data.nome is string && request.resource.data.nome.size() <= 60
+        && request.resource.data.whats is string && request.resource.data.whats.matches('^[0-9]{10,13}$')
+        && request.resource.data.criadoEm is number;
+    }
     match /admins/{uid}    { allow read: if request.auth != null && request.auth.uid == uid; }
 
     // pedidos do site: só o servidor (conta de serviço, que não passa por estas regras) cria;

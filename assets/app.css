@@ -142,3 +142,66 @@ a { color: inherit; text-decoration: none; }
 
 .toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%) translateY(20px); background: var(--tx); color: #fff; padding: 12px 18px; border-radius: 999px; font-size: 14px; font-weight: 500; opacity: 0; transition: .2s; z-index: 90; pointer-events: none; white-space: nowrap; }
 .toast.on { opacity: 1; transform: translateX(-50%); }
+
+/* ---------- movimento (catálogo e painel) ---------- */
+:root { --suave: cubic-bezier(.22, .61, .36, 1); --sai: cubic-bezier(.4, 0, 1, 1); }
+
+/* troca de tela: o conteúdo sobe de leve e os cartões entram em sequência */
+@keyframes entra { from { opacity: 0; transform: translateY(10px); } }
+.anima > * { animation: entra .42s var(--suave) both; }
+.anima > *:nth-child(2) { animation-delay: .04s; }
+.anima > *:nth-child(3) { animation-delay: .08s; }
+.anima > *:nth-child(4) { animation-delay: .12s; }
+.anima > *:nth-child(n+5) { animation-delay: .16s; }
+.anima .grid > *, .anima .trilho > *, .anima .lista2 > *, .anima .blocos > * { animation: entra .46s var(--suave) both; }
+.anima .grid > :nth-child(2), .anima .lista2 > :nth-child(2), .anima .trilho > :nth-child(2), .anima .blocos > :nth-child(2) { animation-delay: .05s; }
+.anima .grid > :nth-child(3), .anima .lista2 > :nth-child(3), .anima .trilho > :nth-child(3), .anima .blocos > :nth-child(3) { animation-delay: .09s; }
+.anima .grid > :nth-child(4), .anima .lista2 > :nth-child(4), .anima .trilho > :nth-child(4), .anima .blocos > :nth-child(4) { animation-delay: .13s; }
+.anima .grid > :nth-child(5), .anima .lista2 > :nth-child(5) { animation-delay: .16s; }
+.anima .grid > :nth-child(6), .anima .lista2 > :nth-child(6) { animation-delay: .19s; }
+.anima .grid > :nth-child(7), .anima .lista2 > :nth-child(7) { animation-delay: .22s; }
+.anima .grid > :nth-child(n+8), .anima .lista2 > :nth-child(n+8) { animation-delay: .25s; }
+
+/* resposta ao toque */
+.card, .bloco, .chip, .btn, .icon-btn, .tam, .op, .linha, .abas button, .tabs button, .seg button, .menu button, .pill {
+  transition: transform .2s var(--suave), background-color .22s, color .22s, border-color .22s, box-shadow .22s, opacity .22s;
+  -webkit-tap-highlight-color: transparent;
+}
+.card:active, .bloco:active, .linha:active { transform: scale(.975); }
+.chip:active, .btn:active, .icon-btn:active, .tam:active, .op:active, .seg button:active { transform: scale(.96); }
+.abas button:active svg, .tabs button:active svg { transform: scale(.88); }
+.abas button svg, .tabs button svg { transition: transform .2s var(--suave); }
+.card .ph img { transition: transform .6s var(--suave), opacity .3s; }
+@media (hover: hover) {
+  .card:hover { transform: translateY(-3px); }
+  .card:hover .ph img { transform: scale(1.05); }
+  .btn:hover { filter: brightness(1.06); }
+}
+
+/* página do produto / editor: sobe ao abrir, desce ao fechar */
+.pagina.on { animation: sobe .42s var(--suave); }
+@keyframes sobe { from { transform: translateY(36px); opacity: 0; } }
+.pagina.sai { display: block; pointer-events: none; animation: desce .26s var(--sai) forwards; }
+@keyframes desce { to { transform: translateY(36px); opacity: 0; } }
+@media (min-width: 720px) {
+  @keyframes sobe { from { transform: translateY(18px) scale(.985); opacity: 0; } }
+  @keyframes desce { to { transform: translateY(18px) scale(.985); opacity: 0; } }
+}
+
+/* véu e folha de filtros */
+.veu { display: block; opacity: 0; pointer-events: none; transition: opacity .3s var(--suave); }
+.veu.on { opacity: 1; pointer-events: auto; }
+.folha { transition: transform .42s var(--suave); }
+
+/* aviso */
+.toast { transition: opacity .3s var(--suave), transform .3s var(--suave); }
+
+/* quem pediu menos movimento no aparelho não vê animação */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
+}
+
+/* pílula que desliza entre as abas */
+.pilula { position: absolute; left: 0; top: 0; z-index: 0; border-radius: 999px; pointer-events: none; opacity: 0;
+  transition: transform .5s cubic-bezier(.34, 1.25, .5, 1), width .5s cubic-bezier(.34, 1.25, .5, 1), height .5s var(--suave), opacity .2s; }
+.abas > button, .tabs > button { position: relative; z-index: 1; }

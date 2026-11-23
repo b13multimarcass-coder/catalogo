@@ -2,7 +2,8 @@
 //
 // Faz três coisas que não podem ficar no site, porque usam chaves secretas:
 //   POST /frete      cota o frete no Melhor Envio (e soma retirada / entrega na cidade)
-//   POST /pagar      confere preços e estoque, grava o pedido e cria o link de pagamento da InfinitePay
+//   POST /cupom      confere um cupom de desconto (coleção cupons, criada no painel)
+//   POST /pagar      confere preços, cupom e estoque, grava o pedido e cria o link de pagamento da InfinitePay
 //   POST /confirmar  o site chama quando o cliente volta do pagamento
 //   POST /webhook    a InfinitePay chama quando o pagamento é aprovado
 //   POST /etiqueta   o painel chama (só lojista): compra e gera a etiqueta no Melhor Envio
@@ -48,6 +49,7 @@ export default {
     try {
       const b = await req.json();
       if (url.pathname === '/frete') return json(await cotar(env, b), 200, cors);
+      if (url.pathname === '/cupom') return json(await lerCupom(env, b.codigo), 200, cors);
       if (url.pathname === '/pagar') return json(await pagar(env, b, url.origin), 200, cors);
       if (url.pathname === '/etiqueta') return json(await etiqueta(env, b, req), 200, cors);
       if (url.pathname === '/confirmar') {
@@ -78,8 +80,31 @@ function opcoesLocais(cfg, cep, subtotal) {
   return ops;
 }
 
+// Regras de preço do pedido. A MESMA função está em assets/data.js e em servidor/worker.js: mude nos dois.
+// linhas: [{ preco (já com promoção e personalização), qtd }]. Ordem: maior entre cupom e desconto
+// progressivo (não somam) e, por cima, o desconto do Pix.
+function faixaProgressiva(cfg, pecas) {
+  const p = cfg.progressivo;
+  if (!p?.ativo) return null;
+  return (p.faixas || []).filter((f) => f.qtd > 1 && f.pct > 0 && pecas >= f.qtd).sort((a, b) => b.pct - a.pct)[0] || null;
+}
+function calcularPedido(cfg, linhas, cupom, metodo) {
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const pecas = linhas.reduce((t, l) => t + l.qtd, 0);
+  const faixa = faixaProgressiva(cfg, pecas);
+  const pctCupom = Number(cupom?.pct) || 0, pctFaixa = Number(faixa?.pct) || 0;
+  const pct = Math.max(pctCupom, pctFaixa);
+  const regra = !pct ? '' : pctCupom >= pctFaixa ? 'cupom' : 'progressivo';
+  const pix = metodo === 'pix' ? Math.min(30, Math.max(0, Number(cfg.pixDesconto) || 0)) : 0;
+  const itens = linhas.map((l) => ({ ...l, cheio: r2(l.preco), semPix: Math.round(l.preco * (100 - pct)) / 100, final: Math.round(l.preco * (100 - pct) * (100 - pix) / 100) / 100 }));
+  const soma = (k) => r2(itens.reduce((t, i) => t + i[k] * i.qtd, 0));
+  const bruto = soma('cheio'), aposDesc = soma('semPix'), total = soma('final');
+  return { itens, pecas, bruto, pct, regra, faixa, cupom: regra === 'cupom' ? cupom : null, desconto: r2(bruto - aposDesc), pix, descontoPix: r2(aposDesc - total), total };
+}
+
 // Lê a sacola com os preços e o estoque de verdade (nunca confia no que o navegador mandou)
-async function lerSacola(env, itens) {
+async function lerSacola(env, itens, cfg) {
+  const pers = { ativo: false, preco: 30, maxNome: 12, ...(cfg.pers || {}) };
   if (!Array.isArray(itens) || !itens.length || itens.length > 30) throw falha('Sacola vazia ou grande demais');
   const linhas = [];
   for (const i of itens) {
@@ -90,7 +115,16 @@ async function lerSacola(env, itens) {
     const v = (p.data.variacoes || []).find((x) => x.tam === i.tam);
     const estoque = p.data.esgotadoManual ? 0 : v?.qtd || 0;
     if (estoque < qtd) throw falha(`${p.data.nome} (${i.tam}) tem só ${Math.max(0, estoque)} em estoque`);
-    linhas.push({ id: p.id, nome: p.data.nome, categoria: p.data.categoria, tam: i.tam, qtd, preco: precoAtual(p.data) });
+    const l = { id: p.id, nome: p.data.nome, categoria: p.data.categoria, tam: i.tam, qtd, preco: precoAtual(p.data) };
+    if (i.pers) {
+      if (!pers.ativo || p.data.categoria !== 'camisa') throw falha('A personalização não está disponível agora');
+      const nome = String(i.pers.nome || '').toUpperCase().replace(/[^A-ZÀ-Ú .'-]/g, '').trim().slice(0, Number(pers.maxNome) || 12);
+      const numero = String(i.pers.numero || '').replace(/\D/g, '').slice(0, 2);
+      if (!nome && !numero) throw falha('Preencha o nome ou o número da personalização');
+      l.pers = { nome, numero };
+      l.preco = Math.round((l.preco + (Number(pers.preco) || 0)) * 100) / 100;
+    }
+    linhas.push(l);
   }
   return linhas;
 }
@@ -108,7 +142,7 @@ async function cotar(env, b, linhas) {
   const cep = soDigitos(b.cep);
   if (cep.length !== 8) throw falha('CEP inválido');
   const cfg = (await fsGet(env, 'config/loja'))?.data || {};
-  linhas = linhas || (await lerSacola(env, b.itens));
+  linhas = linhas || (await lerSacola(env, b.itens, cfg));
   const subtotal = linhas.reduce((t, i) => t + i.preco * i.qtd, 0);
   const opcoes = opcoesLocais(cfg, cep, subtotal);
 
@@ -129,12 +163,28 @@ async function cotar(env, b, linhas) {
   return { cep, subtotal, opcoes };
 }
 
+/* ---------------- cupom ---------------- */
+// Desconto em % sobre os produtos (o frete não entra). Só o servidor aplica: o navegador só mostra.
+async function lerCupom(env, codigo) {
+  const c = String(codigo || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 30);
+  if (!c) throw falha('Digite o cupom');
+  const d = (await fsGet(env, `cupons/${c}`))?.data;
+  const pct = Number(d?.pct);
+  if (!d || d.ativo === false || !(pct > 0 && pct <= 90)) throw falha('Cupom inválido ou encerrado');
+  return { codigo: c, pct };
+}
+
 /* ---------------- pagamento ---------------- */
 async function pagar(env, b, workerUrl) {
-  const linhas = await lerSacola(env, b.itens);
-  const { cep, subtotal, opcoes } = await cotar(env, b, linhas);
+  const cfg = (await fsGet(env, 'config/loja'))?.data || {};
+  const linhas = await lerSacola(env, b.itens, cfg);
+  const { cep, opcoes } = await cotar(env, b, linhas);
   const frete = opcoes.find((o) => o.id === b.freteId);
   if (!frete) throw falha('Escolha a entrega de novo: o valor do frete mudou');
+  const cupom = b.cupom ? await lerCupom(env, b.cupom) : null;
+  const metodo = b.metodo === 'pix' ? 'pix' : 'cartao';
+  // preço de cada peça já com os descontos (é o que vai para a InfinitePay e para o lucro no painel)
+  const conta = calcularPedido(cfg, linhas, cupom, metodo);
 
   const nome = String(b.cliente?.nome || '').trim().slice(0, 80);
   const tel = soDigitos(b.cliente?.telefone);
@@ -151,22 +201,24 @@ async function pagar(env, b, workerUrl) {
   }
 
   const id = 'B13-' + Date.now().toString(36).toUpperCase().slice(-6) + Math.random().toString(36).slice(2, 4).toUpperCase();
-  const total = Math.round((subtotal + frete.preco) * 100) / 100;
+  const total = Math.round((conta.total + frete.preco) * 100) / 100;
   const pedido = {
     id, criadoEm: Date.now(), status: 'aguardando',
-    itens: linhas.map(({ id, nome, tam, qtd, preco }) => ({ id, nome, tam, qtd, preco })),
-    subtotal, frete: { id: frete.id, tipo: frete.tipo, servicoId: frete.servicoId || null, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
+    itens: conta.itens.map(({ id, nome, tam, qtd, final, cheio, pers }) => ({ id, nome, tam, qtd, preco: final, cheio, ...(pers ? { pers } : {}) })),
+    subtotal: conta.bruto, metodo,
+    ...(conta.regra ? { regra: conta.regra, desconto: conta.desconto } : {}), ...(conta.cupom ? { cupom: conta.cupom } : {}),
+    ...(conta.descontoPix ? { descontoPix: conta.descontoPix } : {}),
+    frete: { id: frete.id, tipo: frete.tipo, servicoId: frete.servicoId || null, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
     total, cliente: { nome, telefone, ...(cpf ? { cpf } : {}) }, endereco, pagamento: {}
   };
   await fsSet(env, `pedidos/${id}`, pedido, { novo: true });
 
-  const cfg = (await fsGet(env, 'config/loja'))?.data || {};
   const site = env.SITE_URL.replace(/[#?].*$/, '');
   const corpo = {
     handle: env.INFINITEPAY_HANDLE,
     order_nsu: id,
     items: [
-      ...linhas.map((l) => ({ description: `${l.nome} (${l.tam})`, price: Math.round(l.preco * 100), quantity: l.qtd })),
+      ...conta.itens.map((l) => ({ description: `${l.nome} (${l.tam})${l.pers ? ` ${l.pers.nome} ${l.pers.numero}`.trimEnd() : ''}`, price: Math.round(l.final * 100), quantity: l.qtd })),
       ...(frete.preco > 0 ? [{ description: `Frete ${frete.nome}`, price: Math.round(frete.preco * 100), quantity: 1 }] : [])
     ],
     redirect_url: `${site}?pedido=${id}`,
@@ -212,10 +264,11 @@ async function verificar(env, id, transacao, slug, recibo) {
 
   const pago = {
     status: 'pago', pagoEm: Date.now(),
+    ...(p.metodo === 'pix' && c.capture_method && c.capture_method !== 'pix' ? { obs: 'Escolheu Pix (com desconto) no site, mas pagou no cartão' } : {}),
     pagamento: { metodo: c.capture_method || '', parcelas: c.installments || 1, valorPago: (c.paid_amount || c.amount) / 100, transacao: String(transacao), slug: String(slug), recibo: reciboSeguro(recibo) }
   };
   // a condição updateTime garante que só um (webhook ou volta do cliente) faça a baixa
-  const ok = await fsSet(env, `pedidos/${id}`, pago, { campos: ['status', 'pagoEm', 'pagamento'], updateTime: doc.updateTime, tolerante: true });
+  const ok = await fsSet(env, `pedidos/${id}`, pago, { campos: ['status', 'pagoEm', 'pagamento', ...(pago.obs ? ['obs'] : [])], updateTime: doc.updateTime, tolerante: true });
   if (!ok) return publico((await fsGet(env, `pedidos/${id}`)).data);
 
   for (const i of p.itens) {
@@ -233,14 +286,15 @@ async function baixarEstoque(env, produtoId, tam, qtd) {
     const d = await fsGet(env, `produtos/${produtoId}`);
     if (!d) return;
     const variacoes = d.data.variacoes.map((v) => (v.tam === tam ? { ...v, qtd: v.qtd - qtd } : v));
-    if (await fsSet(env, `produtos/${produtoId}`, { variacoes }, { campos: ['variacoes'], updateTime: d.updateTime, tolerante: true })) return;
+    const vendidos = (Number(d.data.vendidos) || 0) + qtd;
+    if (await fsSet(env, `produtos/${produtoId}`, { variacoes, vendidos }, { campos: ['variacoes', 'vendidos'], updateTime: d.updateTime, tolerante: true })) return;
   }
   console.error('estoque não baixou', produtoId, tam);
 }
 // O que o cliente pode ver do pedido
 const publico = (p) => ({
   pedido: p.id, status: p.status, pago: ['pago', 'enviado', 'entregue'].includes(p.status),
-  itens: p.itens, subtotal: p.subtotal, frete: p.frete, total: p.total, recibo: p.pagamento?.recibo || '', metodo: p.pagamento?.metodo || ''
+  itens: p.itens, subtotal: p.subtotal, cupom: p.cupom || null, regra: p.regra || '', desconto: p.desconto || 0, descontoPix: p.descontoPix || 0, frete: p.frete, total: p.total, recibo: p.pagamento?.recibo || '', metodo: p.pagamento?.metodo || ''
 });
 
 /* ---------------- etiqueta (Melhor Envio) ---------------- */
