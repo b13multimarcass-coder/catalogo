@@ -1,4 +1,4 @@
-import { abrir, esgotado, precoAtual, brl, esc, ico, icoWhats, CATEGORIAS, soDigitos } from './data.js';
+import { abrir, esgotado, precoAtual, brl, esc, ico, icoWhats, CATEGORIAS, soDigitos, cpfValido } from './data.js';
 import { criar as criarServidor, buscarEndereco } from './servidor.js';
 
 const $ = (s) => document.querySelector(s);
@@ -237,9 +237,9 @@ function telaLoja() {
 
 /* finalizar compra: entrega, dados e pagamento */
 const CK_KEY = 'b13-cliente';
-const ck = { cep: '', opcoes: null, freteId: '', carregando: false, erro: '', simulado: false, nome: '', telefone: '', rua: '', numero: '', complemento: '', bairro: '', cidade: '', uf: '' };
+const ck = { cep: '', opcoes: null, freteId: '', carregando: false, erro: '', simulado: false, nome: '', telefone: '', cpf: '', rua: '', numero: '', complemento: '', bairro: '', cidade: '', uf: '' };
 try { Object.assign(ck, JSON.parse(localStorage.getItem(CK_KEY)) || {}, { opcoes: null, carregando: false, erro: '' }); } catch {}
-const CAMPOS_CK = ['cep', 'freteId', 'nome', 'telefone', 'rua', 'numero', 'complemento', 'bairro', 'cidade', 'uf'];
+const CAMPOS_CK = ['cep', 'freteId', 'nome', 'telefone', 'cpf', 'rua', 'numero', 'complemento', 'bairro', 'cidade', 'uf'];
 const salvarCk = () => gravar(CK_KEY, Object.fromEntries(CAMPOS_CK.map((k) => [k, ck[k]])));
 const freteEscolhido = () => ck.opcoes?.find((o) => o.id === ck.freteId);
 const fmtCep = (c) => { const d = soDigitos(c); return d.length > 5 ? d.slice(0, 5) + '-' + d.slice(5, 8) : d; };
@@ -269,6 +269,7 @@ function telaFinalizar() {
       <section class="passo"><h2><b>2</b> Seus dados</h2>
         ${campo('nome', 'Nome completo', 'autocomplete="name"')}
         ${campo('telefone', 'WhatsApp com DDD', 'inputmode="tel" autocomplete="tel" placeholder="(73) 99999-9999"')}
+        ${op?.tipo === 'transportadora' ? campo('cpf', 'CPF (vai na etiqueta de envio)', 'inputmode="numeric" maxlength="14" placeholder="000.000.000-00"') : ''}
         ${entrega ? `
           <div class="dupla-ck">${campo('rua', 'Rua', 'autocomplete="address-line1"')}${campo('numero', 'Número', 'inputmode="numeric"')}</div>
           ${campo('complemento', 'Complemento', 'placeholder="Opcional"')}
@@ -305,6 +306,7 @@ async function pagarAgora(b) {
   const faltando = !op ? (ck.opcoes ? ['cep', 'Escolha a forma de entrega'] : ['cep', 'Calcule o frete com o seu CEP'])
     : ck.nome.trim().length < 3 ? ['nome', 'Informe seu nome']
     : soDigitos(ck.telefone).length < 10 ? ['telefone', 'Informe seu WhatsApp com DDD']
+    : op.tipo === 'transportadora' && !cpfValido(ck.cpf) ? ['cpf', 'Informe um CPF válido. Ele vai na etiqueta de envio']
     : op.tipo !== 'retirada' && ['rua', 'numero', 'bairro', 'cidade', 'uf'].find((k) => !String(ck[k]).trim());
   if (faltando) {
     const [k, msg] = Array.isArray(faltando) ? faltando : [faltando, 'Complete o endereço de entrega'];
@@ -314,7 +316,7 @@ async function pagarAgora(b) {
   try {
     const r = await srv.pagar({
       itens: sacola, cep: ck.cep, freteId: ck.freteId,
-      cliente: { nome: ck.nome.trim(), telefone: ck.telefone },
+      cliente: { nome: ck.nome.trim(), telefone: ck.telefone, ...(op.tipo === 'transportadora' ? { cpf: soDigitos(ck.cpf) } : {}) },
       endereco: op.tipo === 'retirada' ? null : { rua: ck.rua, numero: ck.numero, complemento: ck.complemento, bairro: ck.bairro, cidade: ck.cidade, uf: ck.uf }
     });
     location.href = r.url;

@@ -1,4 +1,4 @@
-# Servidor de frete e pagamento
+# Servidor de frete, etiqueta e pagamento
 
 O arquivo `worker.js` roda de graça na Cloudflare. É ele que guarda as chaves da InfinitePay, do Melhor Envio e do Firebase, que não podem ficar no site.
 
@@ -15,8 +15,20 @@ A InfinitePay não tem ambiente de teste. O teste final é uma compra real de R$
 
 ## 2. Melhor Envio (conta da B13)
 1. Criar a conta em melhorenvio.com.br, com o endereço de onde os pacotes saem.
-2. Gerar um token com a permissão **Cotação de fretes** (`shipping-calculate`), em Integrações > Permissões de acesso > Gerar novo token. Se essa opção não aparecer, o token sai por um "aplicativo" na Área Dev e eu configuro.
-3. Anotar a validade do token e renovar antes de vencer. Com o token vencido, o site mostra só retirada e entrega na cidade.
+2. Gerar um token em Integrações > Permissões de acesso > Gerar novo token, marcando estas permissões:
+
+   | Permissão | Para quê |
+   |---|---|
+   | `shipping-calculate` | cotar o frete no site |
+   | `cart-read`, `cart-write` | montar a etiqueta |
+   | `shipping-checkout` | pagar a etiqueta com o saldo da carteira |
+   | `shipping-generate` | gerar a etiqueta |
+   | `shipping-print` | abrir o PDF para imprimir |
+   | `shipping-tracking`, `orders-read` | pegar o código de rastreio |
+
+   Se essa opção não aparecer, o token sai por um "aplicativo" na Área Dev e eu configuro.
+3. Anotar a validade do token e renovar antes de vencer. Com o token vencido, o site mostra só retirada e entrega na cidade, e o botão de etiqueta avisa o erro.
+4. Colocar **saldo na carteira** do Melhor Envio (Pix ou boleto). Cada etiqueta gerada no painel é paga com esse saldo. Sem saldo, o painel avisa e nada é cobrado.
 
 ## 3. Chave do Firebase para o servidor
 No Console do Firebase: Configurações do projeto > Contas de serviço > **Gerar nova chave privada**.
@@ -38,6 +50,7 @@ Em Settings > Variables and Secrets, criar uma por uma. O cadeado indica "Secret
 | `FIREBASE_PROJECT_ID` | id do projeto Firebase |
 | `FIREBASE_CLIENT_EMAIL` 🔒 | `client_email` do arquivo do passo 3 |
 | `FIREBASE_PRIVATE_KEY` 🔒 | `private_key` do arquivo do passo 3, inteiro, com o BEGIN e o END |
+| `FIREBASE_API_KEY` | o `apiKey` que está em `assets/config.js` (confere o login do painel na hora de gerar etiqueta) |
 | `INFINITEPAY_HANDLE` | InfiniteTag sem `$` |
 | `INFINITEPAY_API_KEY` 🔒 | opcional, a chave `inchk_...` |
 | `MELHOR_ENVIO_TOKEN` 🔒 | token do passo 2 |
@@ -52,6 +65,8 @@ Para testar o frete sem mexer na conta real, `MELHOR_ENVIO_URL` = `https://sandb
   - a retirada na loja;
   - a entrega na cidade (valor e começo dos CEPs);
   - o frete grátis, se houver.
+- Ainda na aba **Loja**, parte **Etiquetas (remetente)**: nome, CPF ou CNPJ, telefone, e-mail e endereço de quem envia. Isso vai impresso na etiqueta.
+- No Firestore, colar de novo o `firestore.rules` (ele ganhou a coleção `interno`, onde fica o remetente).
 - Na parte **Pagamento online**, deve aparecer "Ligado".
 
 ## 7. Teste real de R$ 1,00
@@ -63,6 +78,16 @@ Para testar o frete sem mexer na conta real, `MELHOR_ENVIO_URL` = `https://sandb
    - o estoque do produto vai para 0;
    - a venda aparece na aba Estoque.
 4. Apagar o produto de teste.
+
+## Etiqueta pelo painel
+1. Pedido pago por transportadora (PAC, SEDEX, Jadlog...). Abrir o pedido na aba **Pedidos** e tocar em **Gerar etiqueta**.
+2. O servidor monta a etiqueta com o serviço que o cliente escolheu, paga com o saldo da carteira do Melhor Envio e gera o PDF.
+3. Aparece o botão **Imprimir etiqueta**, e o rastreio já vem preenchido.
+4. Colar a etiqueta na caixa, levar na agência (ou esperar a coleta) e tocar em **Marcar como enviado e avisar o cliente**.
+
+Sem nota fiscal, a etiqueta vai com **declaração de conteúdo** (o Melhor Envio gera junto). O cliente informa o CPF no checkout porque as transportadoras pedem.
+
+Se algo falhar no meio (sem saldo, token vencido), o painel mostra o motivo. Tocar de novo continua de onde parou, sem pagar duas vezes. Para cancelar uma etiqueta paga e ainda não postada, é pelo site do Melhor Envio (o valor volta para a carteira).
 
 ## Como funciona
 1. O cliente digita o CEP. O servidor lê os produtos no Firestore e cota no Melhor Envio. Ele soma a retirada e a entrega na cidade conforme a aba Loja.

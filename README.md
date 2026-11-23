@@ -29,7 +29,8 @@ Para testar no Mac: `python3 -m http.server 8000` dentro desta pasta e abrir htt
 - `priv/{id}`: custo (só o lojista lê)
 - `movimentos/{id}`: vendas, entradas e saídas, com o custo da época (o lucro antigo não muda se o custo mudar)
 - `stats/{id}`: visitas e cliques no WhatsApp
-- `pedidos/{id}`: pedidos pagos pelo site (cliente, endereço, itens, frete, pagamento, andamento). Só o servidor cria.
+- `pedidos/{id}`: pedidos pagos pelo site (cliente, CPF, endereço, itens, frete, pagamento, etiqueta, andamento). Só o servidor cria.
+- `interno/remetente`: quem envia o pacote (nome, CPF/CNPJ, endereço), usado na etiqueta do Melhor Envio. Só o lojista lê.
 
 ## Identidade visual
 - Originais enviados pela B13 em `identidade/`. Azul da marca: `#4055A2`.

@@ -15,6 +15,8 @@ service cloud.firestore {
     // custo fica separado do produto para o cliente nunca ver
     match /priv/{id}       { allow read, write: if admin(); }
     match /movimentos/{id} { allow read, write: if admin(); }
+    // dados do remetente da etiqueta (CPF/CNPJ, endereço)
+    match /interno/{doc}   { allow read, write: if admin(); }
     match /admins/{uid}    { allow read: if request.auth != null && request.auth.uid == uid; }
 
     // pedidos do site: só o servidor (conta de serviço, que não passa por estas regras) cria;

@@ -5,6 +5,7 @@
 //   POST /pagar      confere preços e estoque, grava o pedido e cria o link de pagamento da InfinitePay
 //   POST /confirmar  o site chama quando o cliente volta do pagamento
 //   POST /webhook    a InfinitePay chama quando o pagamento é aprovado
+//   POST /etiqueta   o painel chama (só lojista): compra e gera a etiqueta no Melhor Envio
 // Pagamento aprovado: o pedido vira "pago", o estoque baixa e a venda entra no painel.
 //
 // Variáveis (Cloudflare > Worker > Settings > Variables and Secrets). Passo a passo em servidor/LEIA-ME.md.
@@ -12,6 +13,7 @@
 //   FIREBASE_PROJECT_ID    id do projeto Firebase
 //   FIREBASE_CLIENT_EMAIL  da chave da conta de serviço (secreto)
 //   FIREBASE_PRIVATE_KEY   da chave da conta de serviço (secreto)
+//   FIREBASE_API_KEY       apiKey do app Web (a mesma de assets/config.js); confere o login do painel
 //   INFINITEPAY_HANDLE     InfiniteTag da loja, sem o $
 //   INFINITEPAY_API_KEY    opcional (secreto); libera "parcelas sem juros"
 //   MELHOR_ENVIO_TOKEN     token do Melhor Envio (secreto)
@@ -47,6 +49,7 @@ export default {
       const b = await req.json();
       if (url.pathname === '/frete') return json(await cotar(env, b), 200, cors);
       if (url.pathname === '/pagar') return json(await pagar(env, b, url.origin), 200, cors);
+      if (url.pathname === '/etiqueta') return json(await etiqueta(env, b, req), 200, cors);
       if (url.pathname === '/confirmar') {
         if (!b.pedido) throw falha('Pedido não informado');
         return json(await verificar(env, b.pedido, b.transaction_nsu, b.slug, b.receipt_url), 200, cors);
@@ -92,6 +95,15 @@ async function lerSacola(env, itens) {
   return linhas;
 }
 
+// Embalagem de cada peça para o Melhor Envio (ele junta tudo nas caixas)
+function produtosME(cfg, linhas) {
+  const emb = { ...EMBALAGENS, ...(cfg.embalagens || {}) };
+  return linhas.map((l) => {
+    const e = emb[l.categoria] || emb.camisa;
+    return { id: `${l.id}-${l.tam}`, width: e.largura, height: e.altura, length: e.comprimento, weight: e.peso, insurance_value: Math.round(l.preco * 100) / 100, quantity: l.qtd };
+  });
+}
+
 async function cotar(env, b, linhas) {
   const cep = soDigitos(b.cep);
   if (cep.length !== 8) throw falha('CEP inválido');
@@ -102,29 +114,16 @@ async function cotar(env, b, linhas) {
 
   const origem = soDigitos(cfg.cepOrigem);
   if (origem.length === 8 && env.MELHOR_ENVIO_TOKEN) {
-    const emb = { ...EMBALAGENS, ...(cfg.embalagens || {}) };
-    const produtos = linhas.map((l) => {
-      const e = emb[l.categoria] || emb.camisa;
-      return { id: `${l.id}-${l.tam}`, width: e.largura, height: e.altura, length: e.comprimento, weight: e.peso, insurance_value: Math.round(l.preco * 100) / 100, quantity: l.qtd };
-    });
-    const r = await fetch(`${env.MELHOR_ENVIO_URL || 'https://melhorenvio.com.br'}/api/v2/me/shipment/calculate`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.MELHOR_ENVIO_TOKEN}`, Accept: 'application/json', 'Content-Type': 'application/json',
-        'User-Agent': `Catalogo B13 (${env.MELHOR_ENVIO_EMAIL || 'contato'})`
-      },
-      body: JSON.stringify({ from: { postal_code: origem }, to: { postal_code: cep }, products: produtos })
-    });
-    if (!r.ok) console.error('melhor envio', r.status, await r.text());
-    else {
-      const servicos = (await r.json()).filter((s) => !s.error && s.custom_price);
+    try {
+      const servicos = (await me(env, '/shipment/calculate', { from: { postal_code: origem }, to: { postal_code: cep }, products: produtosME(cfg, linhas) }))
+        .filter((s) => !s.error && s.custom_price);
       const transp = servicos.map((s) => ({
         id: `me-${s.id}`, tipo: 'transportadora', servicoId: s.id, nome: s.name, empresa: s.company?.name || '',
         logo: s.company?.picture || '', preco: Number(s.custom_price), prazo: s.custom_delivery_time
       })).sort((a, b) => a.preco - b.preco);
       if (transp.length && Number(cfg.freteGratisAcima) > 0 && subtotal >= Number(cfg.freteGratisAcima)) transp[0].preco = 0;
       opcoes.push(...transp);
-    }
+    } catch (e) { console.error('cotação melhor envio', e.message); }
   }
   if (!opcoes.length) throw falha('Não achamos entrega para esse CEP. Chame a loja no WhatsApp.');
   return { cep, subtotal, opcoes };
@@ -142,6 +141,8 @@ async function pagar(env, b, workerUrl) {
   if (nome.length < 3) throw falha('Informe seu nome');
   if (tel.length < 10) throw falha('Informe seu WhatsApp com DDD');
   const telefone = tel.length <= 11 ? '55' + tel : tel;
+  const cpf = soDigitos(b.cliente?.cpf);
+  if (frete.tipo === 'transportadora' && !cpfValido(cpf)) throw falha('Informe um CPF válido (ele vai na etiqueta de envio)');
   let endereco = null;
   if (frete.tipo !== 'retirada') {
     const e = b.endereco || {};
@@ -154,8 +155,8 @@ async function pagar(env, b, workerUrl) {
   const pedido = {
     id, criadoEm: Date.now(), status: 'aguardando',
     itens: linhas.map(({ id, nome, tam, qtd, preco }) => ({ id, nome, tam, qtd, preco })),
-    subtotal, frete: { id: frete.id, tipo: frete.tipo, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
-    total, cliente: { nome, telefone }, endereco, pagamento: {}
+    subtotal, frete: { id: frete.id, tipo: frete.tipo, servicoId: frete.servicoId || null, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
+    total, cliente: { nome, telefone, ...(cpf ? { cpf } : {}) }, endereco, pagamento: {}
   };
   await fsSet(env, `pedidos/${id}`, pedido, { novo: true });
 
@@ -242,6 +243,148 @@ const publico = (p) => ({
   itens: p.itens, subtotal: p.subtotal, frete: p.frete, total: p.total, recibo: p.pagamento?.recibo || '', metodo: p.pagamento?.metodo || ''
 });
 
+/* ---------------- etiqueta (Melhor Envio) ---------------- */
+// Etapas: carrinho > pagar com o saldo da carteira > gerar > imprimir. Cada etapa fica salva no pedido
+// (campo etiqueta), então se algo falhar no meio, chamar de novo continua de onde parou sem comprar duas vezes.
+async function etiqueta(env, b, req) {
+  await exigirAdmin(env, req);
+  if (!env.MELHOR_ENVIO_TOKEN) throw falha('O token do Melhor Envio não está configurado no servidor');
+  const id = String(b.pedido || '');
+  const caminho = `pedidos/${encodeURIComponent(id)}`;
+  const doc = await fsGet(env, caminho);
+  if (!doc) throw falha('Pedido não encontrado');
+  const p = doc.data;
+  if (p.frete?.tipo !== 'transportadora' || !p.endereco) throw falha('Esse pedido não vai por transportadora');
+  if (!['pago', 'enviado'].includes(p.status)) throw falha('A etiqueta só sai depois do pagamento aprovado');
+  let et = p.etiqueta || {};
+  const salvar = () => fsSet(env, caminho, { etiqueta: et, ...(et.rastreio && !p.rastreio ? { rastreio: et.rastreio } : {}) }, { campos: et.rastreio && !p.rastreio ? ['etiqueta', 'rastreio'] : ['etiqueta'] });
+
+  // 1. carrinho: a trava do updateTime impede que dois cliques comprem duas etiquetas
+  if (!et.meId) {
+    if (et.status === 'criando' && Date.now() - (et.em || 0) < 120000) throw falha('A etiqueta já está sendo gerada. Espere um minuto e abra o pedido de novo.');
+    const livre = await fsSet(env, caminho, { etiqueta: { status: 'criando', em: Date.now() } }, { campos: ['etiqueta'], updateTime: doc.updateTime, tolerante: true });
+    if (!livre) throw falha('A etiqueta já está sendo gerada. Espere um minuto e abra o pedido de novo.');
+    try {
+      const c = await me(env, '/cart', await montarCarrinho(env, p));
+      et = { status: 'carrinho', meId: c.id, em: Date.now() };
+    } catch (e) {
+      et = { status: 'erro', em: Date.now() };
+      await salvar();
+      throw erroME(e);
+    }
+    await salvar();
+  }
+  // 2. paga com o saldo da carteira do Melhor Envio
+  if (et.status === 'carrinho') {
+    const c = await me(env, '/shipment/checkout', { orders: [et.meId] }).catch((e) => { throw erroME(e, 'checkout'); });
+    et = { ...et, status: 'paga', custo: Number(c.purchase?.total) || null, compra: c.purchase?.protocol || '' };
+    await salvar();
+  }
+  // 3. gera a etiqueta
+  if (et.status === 'paga') {
+    await me(env, '/shipment/generate', { orders: [et.meId] }).catch((e) => { throw erroME(e); });
+    et = { ...et, status: 'gerada' };
+    await salvar();
+  }
+  // 4. link do PDF e rastreio
+  if (!et.url) {
+    const pr = await me(env, '/shipment/print', { mode: 'public', orders: [et.meId] }).catch((e) => { throw erroME(e); });
+    et.url = pr.url || '';
+  }
+  if (!et.rastreio) {
+    const o = await me(env, `/orders/${encodeURIComponent(et.meId)}`, null, 'GET').catch(() => ({}));
+    et.rastreio = o.tracking || o.self_tracking || '';
+    et.protocolo = o.protocol || '';
+  }
+  await salvar();
+  return et;
+}
+
+async function montarCarrinho(env, p) {
+  const rem = (await fsGet(env, 'interno/remetente'))?.data || {};
+  const cfg = (await fsGet(env, 'config/loja'))?.data || {};
+  const docRem = soDigitos(rem.documento);
+  const cepRem = soDigitos(rem.cep || cfg.cepOrigem);
+  if (!rem.nome || ![11, 14].includes(docRem.length) || !rem.rua || !rem.numero || !rem.cidade || cepRem.length !== 8)
+    throw falha('Preencha os dados do remetente no painel: aba Loja, parte Etiquetas');
+
+  // mesma conta da cotação, só com o serviço escolhido, para pegar as caixas (volumes)
+  const servico = Number(p.frete.servicoId || String(p.frete.id).replace('me-', ''));
+  const linhas = [];
+  for (const i of p.itens) linhas.push({ ...i, categoria: (await fsGet(env, `produtos/${encodeURIComponent(i.id)}`))?.data?.categoria || 'camisa' });
+  const cot = await me(env, '/shipment/calculate', { from: { postal_code: cepRem }, to: { postal_code: soDigitos(p.endereco.cep) }, products: produtosME(cfg, linhas), services: String(servico) });
+  const s = Array.isArray(cot) ? cot.find((x) => Number(x.id) === servico) : cot;
+  if (!s || s.error || !s.packages?.length) throw falha(`${p.frete.nome} não atende mais esse CEP${s?.error ? ` (${s.error})` : ''}. Gere a etiqueta no site do Melhor Envio.`);
+
+  const tel = (t) => { const d = soDigitos(t); return d.length >= 12 && d.startsWith('55') ? d.slice(2) : d; };
+  const from = {
+    name: rem.nome, phone: tel(rem.telefone), email: rem.email || env.MELHOR_ENVIO_EMAIL || undefined,
+    address: rem.rua, complement: rem.complemento || '', number: rem.numero, district: rem.bairro || '',
+    city: rem.cidade, state_abbr: String(rem.uf || '').toUpperCase(), country_id: 'BR', postal_code: cepRem
+  };
+  if (docRem.length === 14) Object.assign(from, { company_document: docRem, state_register: rem.ie || '' });
+  else from.document = docRem;
+  const e = p.endereco;
+  const to = {
+    name: p.cliente.nome, phone: tel(p.cliente.telefone), document: p.cliente.cpf || undefined,
+    address: e.rua, complement: e.complemento || '', number: e.numero, district: e.bairro,
+    city: e.cidade, state_abbr: e.uf, country_id: 'BR', postal_code: soDigitos(e.cep)
+  };
+  return {
+    service: servico, from, to,
+    products: p.itens.map((i) => ({ name: `${i.nome} (${i.tam})`, quantity: i.qtd, unitary_value: i.preco })),
+    volumes: s.packages.map((k) => ({ height: Number(k.dimensions.height), width: Number(k.dimensions.width), length: Number(k.dimensions.length), weight: Number(k.weight) })),
+    // sem nota fiscal: vai com declaração de conteúdo
+    options: { insurance_value: Math.round(p.subtotal * 100) / 100, receipt: false, own_hand: false, reverse: false, non_commercial: true, platform: 'Catalogo B13', tags: [{ tag: p.id }] }
+  };
+}
+
+// Chamada à API do Melhor Envio. Em erro, guarda a resposta em e.me para erroME explicar.
+async function me(env, caminho, corpo, metodo = 'POST') {
+  const r = await fetch(`${env.MELHOR_ENVIO_URL || 'https://melhorenvio.com.br'}/api/v2/me${caminho}`, {
+    method: metodo,
+    headers: {
+      Authorization: `Bearer ${env.MELHOR_ENVIO_TOKEN}`, Accept: 'application/json', 'Content-Type': 'application/json',
+      'User-Agent': `Catalogo B13 (${env.MELHOR_ENVIO_EMAIL || 'contato'})`
+    },
+    body: corpo ? JSON.stringify(corpo) : undefined
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    console.error('melhor envio', caminho, r.status, JSON.stringify(d));
+    throw Object.assign(new Error(`melhor envio ${caminho} ${r.status}`), { me: d, status: r.status });
+  }
+  return d;
+}
+function erroME(e, etapa) {
+  if (e.publico || !e.me) return e;
+  const d = e.me;
+  let m = (d.errors && Object.values(d.errors).flat()[0]) || d.message || d.error || `erro ${e.status}`;
+  if (e.status === 401 || e.status === 403) m = 'o token venceu ou não tem todas as permissões. Gere um novo (servidor/LEIA-ME.md)';
+  return falha(`Melhor Envio: ${m}${etapa === 'checkout' ? '. Confira se tem saldo na carteira do Melhor Envio.' : ''}`);
+}
+
+// Só o lojista: confere o login do Firebase e se a conta está em admins/
+async function exigirAdmin(env, req) {
+  const tk = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!env.FIREBASE_API_KEY) throw falha('Falta a variável FIREBASE_API_KEY no servidor');
+  if (!tk) throw falha('Entre no painel de novo');
+  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(env.FIREBASE_API_KEY)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idToken: tk })
+  });
+  const uid = (await r.json().catch(() => ({}))).users?.[0]?.localId;
+  if (!uid) throw falha('Login vencido. Saia e entre no painel de novo.');
+  if (!(await fsGet(env, `admins/${encodeURIComponent(uid)}`))) throw falha('Essa conta não tem acesso ao painel');
+}
+
+// Mesma regra de assets/data.js (cpfValido)
+function cpfValido(c) {
+  c = soDigitos(c);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const dv = (n) => { let s = 0; for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
+}
+
 /* ---------------- Firestore (REST, com a conta de serviço) ---------------- */
 const fsBase = (env) => `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 async function fsGet(env, caminho) {
@@ -326,7 +469,7 @@ function corsHeaders(req, env) {
   return {
     'Access-Control-Allow-Origin': origem && (origem === permitida || extras.includes(origem)) ? origem : permitida,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     Vary: 'Origin'
   };
 }

@@ -1,10 +1,10 @@
 import { abrir, esgotado, totalEstoque, precoAtual, brl, esc, ico, icoWhats, comprimir, CATEGORIAS, TAMANHOS, STATUS_PEDIDO, soDigitos } from './data.js';
-import { real as pagamentoReal } from './servidor.js';
+import { real as pagamentoReal, gerarEtiqueta, buscarEndereco } from './servidor.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const api = await abrir();
 const DIA = 86400000;
-const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago', busca: '', loja: null, produtos: [], priv: {}, stats: {}, movs: [], pedidos: [] };
+const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago', busca: '', loja: null, produtos: [], priv: {}, stats: {}, movs: [], pedidos: [], rem: {} };
 const catalogo = new URL('./', location.href).href;
 const linkProduto = (id) => catalogo + '#p/' + id;
 
@@ -59,8 +59,8 @@ function telaLogin(erro = '') {
 }
 
 async function carregar() {
-  const [loja, produtos, priv, stats, movs, pedidos] = await Promise.all([api.config(), api.produtos(), api.privados(), api.stats(), api.movimentos(), api.pedidos()]);
-  Object.assign(S, { loja, produtos, priv, stats, movs, pedidos });
+  const [loja, produtos, priv, stats, movs, pedidos, rem] = await Promise.all([api.config(), api.produtos(), api.privados(), api.stats(), api.movimentos(), api.pedidos(), api.remetente().catch(() => ({}))]);
+  Object.assign(S, { loja, produtos, priv, stats, movs, pedidos, rem });
   S.produtos.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
 async function recarregar() { await carregar(); desenhar(); }
@@ -235,6 +235,15 @@ function abrirPedido(id) {
   const wa = (txt) => `https://wa.me/${soDigitos(p.cliente.telefone)}?text=${encodeURIComponent(txt)}`;
   const nome1 = p.cliente.nome.split(' ')[0];
   const retirada = p.frete?.tipo === 'retirada';
+  const et = p.etiqueta || {};
+  const blocoEtiqueta = p.frete?.tipo === 'transportadora' && ['pago', 'enviado'].includes(p.status) ? `
+      <div class="ped-b"><span>Etiqueta do Melhor Envio</span>
+        ${et.url ? `<b>Pronta${et.custo ? ` · paga ${brl(et.custo)}` : ''}</b>${et.rastreio ? `<div class="muted">Rastreio ${esc(et.rastreio)}</div>` : ''}
+          <a class="btn sec mini" href="${esc(et.url)}" target="_blank" rel="noopener" style="margin-top:10px">${ico('caixa', 18)} Imprimir etiqueta</a>`
+        : et.demo ? `<b>Gerada (simulação)</b><div class="muted" style="font-size:14px">Rastreio ${esc(et.rastreio)}. Com o servidor ligado, aqui aparece o botão para imprimir.</div>`
+        : `<div class="muted" style="font-size:14px">Compra a etiqueta ${esc(p.frete.nome)} com o saldo da carteira do Melhor Envio, gera o PDF para imprimir e já preenche o rastreio.${et.meId ? ' Da última vez ficou pela metade: tocar de novo continua de onde parou, sem pagar duas vezes.' : ''}</div>
+          <button class="btn mini" data-x="etiqueta" style="margin-top:10px">${ico('caixa', 18)} ${et.meId ? 'Continuar etiqueta' : 'Gerar etiqueta'}</button>`}
+      </div>` : '';
   pg.innerHTML = `
     <div class="pg-top"><button class="icon-btn" data-x="fechar" aria-label="Fechar">${ico('fechar')}</button><b>Pedido ${esc(p.id)}</b><span style="width:44px"></span></div>
     <div class="cnt">
@@ -250,8 +259,9 @@ function abrirPedido(id) {
         <div class="ped-l t"><span>Total</span><span>${brl(p.total)}</span></div>
         ${metodoTxt(p.pagamento) ? `<div class="ped-l"><span>Pagamento</span><span>${metodoTxt(p.pagamento)}</span></div>` : ''}
         ${p.pagamento?.recibo ? `<a href="${esc(p.pagamento.recibo)}" target="_blank" rel="noopener" style="text-decoration:underline;font-size:14px">Ver comprovante</a>` : ''}</div>
+      ${blocoEtiqueta}
       ${p.status === 'pago' ? `
-        ${retirada ? '' : `<label class="campo"><span>Código de rastreio (opcional)</span><input class="in" id="pRastreio" value="${esc(p.rastreio || '')}" placeholder="Ex.: AA123456789BR"></label>`}
+        ${retirada ? '' : `<label class="campo"><span>Código de rastreio (opcional)</span><input class="in" id="pRastreio" value="${esc(p.rastreio || et.rastreio || '')}" placeholder="Ex.: AA123456789BR"></label>`}
         <button class="btn" data-x="enviado" style="margin-top:8px">${retirada ? 'Marcar como retirado' : 'Marcar como enviado e avisar o cliente'}</button>` : ''}
       ${p.status === 'enviado' ? '<button class="btn" data-x="entregue">Marcar como entregue</button>' : ''}
       ${p.status === 'aguardando' ? `<p class="muted" style="font-size:14px">O cliente ainda não pagou. Se ele desistir, cancele para não ficar na lista.</p>${p.linkPagamento ? `<button class="btn sec" data-x="copiarLink" style="margin-top:10px">${ico('link', 18)} Copiar link de pagamento</button>` : ''}<button class="perigo" data-x="cancelar">Cancelar pedido</button>` : ''}
@@ -264,6 +274,14 @@ function abrirPedido(id) {
     if (x === 'fechar') return fecharPagina();
     if (x === 'copiarEnd') return copiar(`${p.cliente.nome}\n${endTxt}`, 'Endereço copiado');
     if (x === 'copiarLink') return copiar(p.linkPagamento, 'Link de pagamento copiado');
+    if (x === 'etiqueta') {
+      if (!et.meId && !confirm(`Comprar a etiqueta ${p.frete.nome} no Melhor Envio?\nO valor sai do saldo da carteira do Melhor Envio${p.frete.preco ? ` (o cliente pagou ${brl(p.frete.preco)} de frete)` : ''}.`)) return;
+      b.disabled = true; b.textContent = 'Gerando a etiqueta…';
+      try { await gerarEtiqueta(api, p.id); toast('Etiqueta pronta'); }
+      catch (err) { alert(err.message); }
+      await recarregar();
+      return abrirPedido(p.id);
+    }
     let campos = null;
     if (x === 'enviado') {
       const rastreio = $('#pRastreio')?.value.trim().toUpperCase() || '';
@@ -612,7 +630,14 @@ function formMov(tipo = 'venda', produtoId = '') {
 /* ---------- loja ---------- */
 function telaLoja() {
   const c = S.loja;
+  const r = S.rem || {};
   setTimeout(() => {
+    $('#rCep').addEventListener('change', async () => {
+      if (soDigitos($('#rCep').value).length !== 8) return;
+      const e = await buscarEndereco($('#rCep').value);
+      if (!e) return;
+      [['rRua', e.rua], ['rBairro', e.bairro], ['rCidade', e.cidade], ['rUf', e.uf]].forEach(([id, val]) => { if (val && !$('#' + id).value.trim()) $('#' + id).value = val; });
+    });
     $('#app .adm').addEventListener('click', async (ev) => {
       const b = ev.target.closest('[data-l]');
       if (!b) return;
@@ -627,6 +652,15 @@ function telaLoja() {
         if (nova.whatsapp.length < 12) return toast('Coloque o WhatsApp com DDI e DDD, ex.: 5573999999999');
         if (nova.cepOrigem && nova.cepOrigem.length !== 8) return toast('O CEP de origem precisa ter 8 números');
         if (nova.entregaLocal && !soDigitos(nova.cepsLocais)) return toast('Diga o começo dos CEPs da cidade para a entrega própria');
+        const rem = { nome: v('rNome'), documento: soDigitos(v('rDoc')), ie: v('rIE'), telefone: soDigitos(v('rTel')), email: v('rEmail'), cep: soDigitos(v('rCep')),
+          rua: v('rRua'), numero: v('rNum'), complemento: v('rComp'), bairro: v('rBairro'), cidade: v('rCidade'), uf: v('rUf').toUpperCase() };
+        const remMudou = Object.keys(rem).some((k) => rem[k] !== (S.rem?.[k] ?? ''));
+        if (rem.documento && ![11, 14].includes(rem.documento.length)) return toast('O CPF tem 11 números e o CNPJ tem 14');
+        if (rem.cep && rem.cep.length !== 8) return toast('O CEP do remetente precisa ter 8 números');
+        if (remMudou) {
+          try { await api.salvarRemetente(rem); }
+          catch { return toast('Não deu para salvar o remetente. Atualize as regras do Firestore (README).'); }
+        }
         await api.salvarConfig(nova); toast('Dados da loja salvos'); recarregar();
       }
       if (a === 'sair') api.sair();
@@ -658,6 +692,28 @@ function telaLoja() {
         <label class="campo"><span>CEPs da cidade começam com</span><input class="in" id="cCepsLocais" value="${esc(c.cepsLocais || '')}" placeholder="Ex.: 45600, 45601"></label>
       </div>
       <label class="campo"><span>Frete grátis em compras acima de</span><input class="in" id="cGratis" inputmode="decimal" value="${fmtNum(Number(c.freteGratisAcima) || 0)}" placeholder="Deixe vazio para não ter"></label>
+      <h2 style="margin-top:28px">Etiquetas (remetente)</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">Quem envia o pacote. Vai impresso na etiqueta do Melhor Envio. Só o painel vê esses dados.</p>
+      <label class="campo"><span>Nome ou razão social</span><input class="in" id="rNome" value="${esc(r.nome || '')}"></label>
+      <div class="dupla">
+        <label class="campo"><span>CPF ou CNPJ</span><input class="in" id="rDoc" inputmode="numeric" value="${esc(r.documento || '')}"></label>
+        <label class="campo"><span>Inscrição estadual</span><input class="in" id="rIE" value="${esc(r.ie || '')}" placeholder="Só se for CNPJ"></label>
+      </div>
+      <div class="dupla">
+        <label class="campo"><span>Telefone</span><input class="in" id="rTel" inputmode="tel" value="${esc(r.telefone || '')}" placeholder="(73) 99999-9999"></label>
+        <label class="campo"><span>E-mail</span><input class="in" id="rEmail" type="email" value="${esc(r.email || '')}"></label>
+      </div>
+      <label class="campo"><span>CEP</span><input class="in" id="rCep" inputmode="numeric" value="${esc(r.cep || c.cepOrigem || '')}" placeholder="O mesmo de onde os pacotes saem"></label>
+      <div class="dupla">
+        <label class="campo"><span>Rua</span><input class="in" id="rRua" value="${esc(r.rua || '')}"></label>
+        <label class="campo"><span>Número</span><input class="in" id="rNum" value="${esc(r.numero || '')}"></label>
+      </div>
+      <label class="campo"><span>Complemento</span><input class="in" id="rComp" value="${esc(r.complemento || '')}" placeholder="Opcional"></label>
+      <label class="campo"><span>Bairro</span><input class="in" id="rBairro" value="${esc(r.bairro || '')}"></label>
+      <div class="dupla">
+        <label class="campo"><span>Cidade</span><input class="in" id="rCidade" value="${esc(r.cidade || '')}"></label>
+        <label class="campo"><span>UF</span><input class="in" id="rUf" maxlength="2" value="${esc(r.uf || '')}"></label>
+      </div>
       <h2 style="margin-top:28px">Pagamento online</h2>
       <p class="muted" style="font-size:14px;margin-bottom:10px">${pagamentoReal ? 'Ligado: o cliente paga com Pix ou cartão pela InfinitePay.' : 'Simulado por enquanto. Liga quando o servidor for configurado (servidor/LEIA-ME.md).'}</p>
       <label class="campo"><span>Parcelas sem juros para o cliente</span><input class="in" id="cParcelas" inputmode="numeric" value="${Number(c.parcelasSemJuros) || 0}" placeholder="0"><small class="muted" style="font-size:12px">A loja paga a taxa dessas parcelas. Precisa da chave de API da InfinitePay. 0 = o cliente paga os juros.</small></label>

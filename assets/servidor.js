@@ -4,9 +4,9 @@ import { modo, opcoesLocais, precoAtual, soDigitos } from './data.js';
 
 export const real = !!SERVIDOR_URL && modo === 'firebase';
 
-async function chamar(caminho, corpo) {
+async function chamar(caminho, corpo, extras = {}) {
   const r = await fetch(SERVIDOR_URL.replace(/\/$/, '') + caminho, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo)
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...extras }, body: JSON.stringify(corpo)
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.erro || 'Não deu para falar com o servidor. Tente de novo.');
@@ -57,9 +57,9 @@ export function criar(api, loja, produtos) {
       await api.salvarPedido({
         id, criadoEm: Date.now(), status: 'aguardando',
         itens: linhas(dados.itens).map(({ id, nome, tam, qtd, preco }) => ({ id, nome, tam, qtd, preco })),
-        subtotal, frete: { id: frete.id, tipo: frete.tipo, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
+        subtotal, frete: { id: frete.id, tipo: frete.tipo, servicoId: frete.servicoId || null, nome: frete.nome, empresa: frete.empresa || '', preco: frete.preco, prazo: frete.prazo || null },
         total: Math.round((subtotal + frete.preco) * 100) / 100,
-        cliente: { nome: dados.cliente.nome.trim(), telefone: tel.length <= 11 ? '55' + tel : tel },
+        cliente: { nome: dados.cliente.nome.trim(), telefone: tel.length <= 11 ? '55' + tel : tel, ...(dados.cliente.cpf ? { cpf: soDigitos(dados.cliente.cpf) } : {}) },
         endereco: frete.tipo === 'retirada' ? null : { cep: soDigitos(dados.cep), ...dados.endereco }, pagamento: {}
       });
       return { pedido: id, url: `${location.pathname}?pedido=${id}&demo=pagar` };
@@ -81,6 +81,15 @@ export function criar(api, loja, produtos) {
       return { pedido: p.id, status: p.status, pago: ['pago', 'enviado', 'entregue'].includes(p.status), itens: p.itens, subtotal: p.subtotal, frete: p.frete, total: p.total, recibo: p.pagamento?.recibo || '', metodo: p.pagamento?.metodo || '' };
     }
   };
+}
+
+// Etiqueta do Melhor Envio (painel). O servidor compra com o saldo da carteira, gera e devolve o PDF e o rastreio.
+export async function gerarEtiqueta(api, pedido) {
+  if (real) return chamar('/etiqueta', { pedido }, { Authorization: `Bearer ${await api.token()}` });
+  await espera(900);
+  const et = { status: 'gerada', meId: 'demo', demo: true, url: '', rastreio: 'ME' + Math.random().toString().slice(2, 11) + 'BR', em: Date.now() };
+  await api.atualizarPedido(pedido, { etiqueta: et });
+  return et;
 }
 
 // Endereço pelo CEP (ViaCEP, serviço público e gratuito)

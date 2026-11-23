@@ -111,6 +111,9 @@ function demoApi() {
     async pedidos() { return [...s.pedidos].sort((a, b) => b.criadoEm - a.criadoEm); },
     async salvarPedido(p) { s.pedidos = s.pedidos.filter((x) => x.id !== p.id).concat(p); salvar(); },
     async atualizarPedido(id, campos) { const p = s.pedidos.find((x) => x.id === id); if (p) Object.assign(p, campos); salvar(); },
+    async remetente() { return s.remetente || {}; },
+    async salvarRemetente(r) { s.remetente = r; salvar(); },
+    async token() { return 'demo'; },
     async resetarDemo() { localStorage.removeItem(KEY); }
   };
 }
@@ -202,7 +205,11 @@ async function firebaseApi() {
     },
     async salvarConfig(c) { await setDoc(doc(db, 'config', 'loja'), c, { merge: true }); },
     async pedidos() { return (await lista('pedidos')).sort((a, b) => b.criadoEm - a.criadoEm); },
-    async atualizarPedido(id, campos) { await setDoc(doc(db, 'pedidos', id), campos, { merge: true }); }
+    async atualizarPedido(id, campos) { await setDoc(doc(db, 'pedidos', id), campos, { merge: true }); },
+    // dados de quem envia (vão na etiqueta). Ficam em interno/, que só o lojista lê.
+    async remetente() { const d = await getDoc(doc(db, 'interno', 'remetente')); return d.exists() ? d.data() : {}; },
+    async salvarRemetente(r) { await setDoc(doc(db, 'interno', 'remetente'), r); },
+    async token() { return auth.currentUser?.getIdToken(); }
   };
 }
 
@@ -217,6 +224,13 @@ export function opcoesLocais(cfg, cep, subtotal) {
   if (cfg.entregaLocal && prefixos.some((p) => soDigitos(cep).startsWith(p)))
     ops.push({ id: 'local', tipo: 'local', nome: `Entrega em ${cfg.cidade || 'sua cidade'}`, preco: gratis ? 0 : Number(cfg.valorEntregaLocal) || 0, detalhe: 'Entrega da própria loja' });
   return ops;
+}
+// CPF do cliente vai na etiqueta. Mesma regra em servidor/worker.js.
+export function cpfValido(c) {
+  c = soDigitos(c);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const dv = (n) => { let s = 0; for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
 }
 export const STATUS_PEDIDO = {
   aguardando: 'Aguardando pagamento', pago: 'Pago, a enviar', enviado: 'Enviado', entregue: 'Entregue', cancelado: 'Cancelado'
