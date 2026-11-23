@@ -1,10 +1,11 @@
-import { moverPilula, abrir, esgotado, totalEstoque, precoAtual, brl, esc, ico, icoWhats, comprimir, CATEGORIAS, TAMANHOS, STATUS_PEDIDO, soDigitos, LIGAS, ligaAuto, codigoCupom, ligaDe, VERSOES, persDe } from './data.js';
+import { moverPilula, abrir, esgotado, totalEstoque, precoAtual, brl, esc, ico, icoWhats, comprimir, CATEGORIAS, TAMANHOS, STATUS_PEDIDO, soDigitos, LIGAS, ligaAuto, codigoCupom, ligaDe, VERSOES, persDe, ligado, patchesDe } from './data.js';
 import { real as pagamentoReal, gerarEtiqueta, buscarEndereco } from './servidor.js';
+import { ORIGENS } from './rastreio.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const api = await abrir();
 const DIA = 86400000;
-const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago', busca: '', loja: null, produtos: [], priv: {}, stats: {}, movs: [], pedidos: [], rem: {}, cupons: [], leads: [] };
+const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago', busca: '', loja: null, produtos: [], priv: {}, stats: {}, movs: [], pedidos: [], rem: {}, cupons: [], leads: [], dias: [], visitantes: [], rank: 'repor', filtroCli: 'carrinho' };
 const catalogo = new URL('./', location.href).href;
 const linkProduto = (id) => catalogo + '#p/' + id;
 
@@ -30,7 +31,7 @@ const lucroPeca = (p) => precoAtual(p) - custoDe(p.id);
 /* ---------- login ---------- */
 api.onAuth(async (user) => {
   if (!user) return telaLogin();
-  try { await carregar(); } catch (e) {
+  try { await carregar(); try { localStorage.setItem('b13-lojista', '1'); } catch {} } catch (e) {
     console.error(e);
     return telaLogin('Essa conta não tem acesso ao painel. Peça para liberar o seu e-mail.');
   }
@@ -59,8 +60,8 @@ function telaLogin(erro = '') {
 }
 
 async function carregar() {
-  const [loja, produtos, priv, stats, movs, pedidos, rem, cupons, leads] = await Promise.all([api.config(), api.produtos(), api.privados(), api.stats(), api.movimentos(), api.pedidos(), api.remetente().catch(() => ({})), api.cupons().catch(() => []), api.leads().catch(() => [])]);
-  Object.assign(S, { loja, produtos, priv, stats, movs, pedidos, rem, cupons, leads });
+  const [loja, produtos, priv, stats, movs, pedidos, rem, cupons, leads, dias, visitantes] = await Promise.all([api.config(), api.produtos(), api.privados(), api.stats(), api.movimentos(), api.pedidos(), api.remetente().catch(() => ({})), api.cupons().catch(() => []), api.leads().catch(() => []), api.dias().catch(() => []), api.visitantes(Date.now() - 30 * DIA).catch(() => [])]);
+  Object.assign(S, { loja, produtos, priv, stats, movs, pedidos, rem, cupons, leads, dias, visitantes });
   S.produtos.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
 async function recarregar() { await carregar(); desenhar(); }
@@ -69,6 +70,7 @@ async function recarregar() { await carregar(); desenhar(); }
 const ABAS = [
   { id: 'painel', nome: 'Resumo', ic: 'painel' },
   { id: 'pedidos', nome: 'Pedidos', ic: 'sacola' },
+  { id: 'clientes', nome: 'Clientes', ic: 'pessoas' },
   { id: 'produtos', nome: 'Produtos', ic: 'caixa' },
   { id: 'movs', nome: 'Estoque', ic: 'setas' },
   { id: 'loja', nome: 'Loja', ic: 'loja' }
@@ -77,14 +79,15 @@ const pilulaTabs = () => moverPilula($('.tabs'), 'tabs', matchMedia('(min-width:
 addEventListener('resize', pilulaTabs);
 let chaveAdm = '';
 function desenhar() {
-  const chave = [S.aba, S.filtroProd, S.filtroPed, S.periodo].join('|');
+  const chave = [S.aba, S.filtroProd, S.filtroPed, S.periodo, S.rank, S.filtroCli].join('|');
   const anima = chave !== chaveAdm;
   chaveAdm = chave;
-  const corpo = { painel: telaPainel, pedidos: telaPedidos, produtos: telaProdutos, movs: telaMovs, loja: telaLoja }[S.aba]();
+  const corpo = { painel: telaPainel, pedidos: telaPedidos, clientes: telaClientes, produtos: telaProdutos, movs: telaMovs, loja: telaLoja }[S.aba]();
   const aEnviar = S.pedidos.filter((p) => p.status === 'pago').length;
+  const aChamar = recuperaveis().filter((r) => !r.contatadoEm).length;
   $('#app').innerHTML = `
     <div class="adm ${anima ? 'anima' : ''}">${api.modo === 'demo' ? '<div class="demo-aviso" style="padding-top:10px">Modo demonstração, com produtos de exemplo</div>' : ''}${corpo}</div>
-    <nav class="tabs">${ABAS.map((a) => `<button class="${S.aba === a.id ? 'on' : ''}" data-aba="${a.id}">${ico(a.ic)}${a.nome}${a.id === 'pedidos' && aEnviar ? `<span class="tb-n">${aEnviar}</span>` : ''}</button>`).join('')}</nav>`;
+    <nav class="tabs">${ABAS.map((a) => `<button class="${S.aba === a.id ? 'on' : ''}" data-aba="${a.id}">${ico(a.ic)}${a.nome}${a.id === 'pedidos' && aEnviar ? `<span class="tb-n">${aEnviar}</span>` : ''}${a.id === 'clientes' && aChamar ? `<span class="tb-n">${aChamar}</span>` : ''}</button>`).join('')}</nav>`;
   pilulaTabs();
   $('.tabs').onclick = (e) => {
     const b = e.target.closest('[data-aba]');
@@ -114,6 +117,11 @@ function ligar() {
     else if (acao === 'filtroPed') { S.filtroPed = v; desenhar(); }
     else if (acao === 'irPedidos') { S.aba = 'pedidos'; S.filtroPed = 'pago'; desenhar(); scrollTo(0, 0); }
     else if (acao === 'irProdutos') { S.aba = 'produtos'; S.filtroProd = v; desenhar(); scrollTo(0, 0); }
+    else if (acao === 'rank') { S.rank = v; desenhar(); }
+    else if (acao === 'filtroCli') { S.filtroCli = v; desenhar(); }
+    else if (acao === 'recuperar') abrirRecuperar(v);
+    else if (acao === 'atualizarCli') { b.disabled = true; recarregar(); }
+    else if (acao === 'irClientes') { S.aba = 'clientes'; S.filtroCli = 'carrinho'; desenhar(); scrollTo(0, 0); }
   };
   const busca = $('#bProd');
   if (busca) busca.oninput = (e) => { S.busca = e.target.value; $('#listaProd').innerHTML = listaProdutos(); };
@@ -162,7 +170,6 @@ function telaPainel() {
   });
   const top = Object.values(porProd).sort((a, b) => b.qtd - a.qtd || b.lucro - a.lucro).slice(0, 5);
   const maxQ = top[0]?.qtd || 1;
-  const vistos = S.produtos.map((p) => ({ p, ...(S.stats[p.id] || { views: 0, whats: 0 }) })).sort((a, b) => b.views - a.views).slice(0, 5);
   const thumb = (id) => S.produtos.find((p) => p.id === id)?.thumb || '';
 
   const alerta = (ic, cls, titulo, sub, filtro) => `<button class="alerta" data-acao="irProdutos" data-v="${filtro}"><span class="ic ${cls}">${ico(ic)}</span><span class="m">${titulo}<small>${sub}</small></span>${ico('voltar', 18).replace('<svg', '<svg style="transform:rotate(180deg);color:var(--tx3)"')}</button>`;
@@ -179,6 +186,7 @@ function telaPainel() {
     </div>
 
     ${aEnviarResumo()}
+    ${chamarResumo()}
     ${baixos.length || parados.length || procurados.length || esgotados.length ? `<div class="bloco"><h2>Precisa de atenção</h2>
       ${procurados.length ? alerta('olho', 'r', `${procurados.length} esgotado${procurados.length > 1 ? 's' : ''} com procura`, `${nomes(procurados)}. Vale repor.`, 'esgotados') : ''}
       ${baixos.length ? alerta('alerta', '', `${baixos.length} com estoque baixo`, nomes(baixos), 'baixo') : ''}
@@ -192,12 +200,291 @@ function telaPainel() {
         <button class="linha" data-acao="editar" data-v="${r.id}"><img src="${thumb(r.id)}" alt=""><div class="m"><div class="t">${esc(r.nome)}</div><div class="s">${r.qtd} ${r.qtd === 1 ? 'peça' : 'peças'} · lucro ${brl(r.lucro)}</div><div class="bar"><i style="width:${(r.qtd / maxQ) * 100}%"></i></div></div><div class="v">${brl(r.fat)}</div></button>`).join('') : '<p class="muted">Nenhuma venda nesse período.</p>'}
     </div>
 
-    <div class="bloco"><h2>Mais vistos no catálogo <small>desde o início</small></h2>
-      ${vistos.map((r) => `
-        <button class="linha" data-acao="editar" data-v="${r.p.id}"><img src="${r.p.thumb}" alt=""><div class="m"><div class="t">${esc(r.p.nome)}</div><div class="s">${r.whats} chamaram no WhatsApp (${pct(r.whats, r.views)}%)</div></div><div class="v">${r.views}<small>visitas</small></div></button>`).join('')}
+    ${blocoDesempenho()}
+    </div>
+    <div style="height:24px"></div>`;
+}
+
+/* ---------- rastreio do site: somas por período ---------- */
+const MIN = 60000;
+const diaTs = (id) => { const [y, m, d] = id.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+function somaDias(ini) {
+  const r = {};
+  S.dias.forEach((d) => { if (diaTs(d.id) >= ini) Object.entries(d).forEach(([k, v]) => { if (k !== 'id' && typeof v === 'number') r[k] = (r[k] || 0) + v; }); });
+  return r;
+}
+const rotuloPeriodo = () => PERIODOS.find((x) => x[0] === S.periodo)[1].toLowerCase();
+const fim8 = (t) => soDigitos(t).slice(-8);
+const pagoSt = (p) => ['pago', 'enviado', 'entregue'].includes(p.status);
+// pagou depois (pelo site) com o mesmo WhatsApp?
+const pagouDepois = (whats, desde) => !!whats && S.pedidos.some((p) => pagoSt(p) && fim8(p.cliente?.telefone) === fim8(whats) && p.criadoEm >= desde - 60 * MIN);
+
+/* ---------- desempenho dos produtos (Resumo) ---------- */
+const RANKS = [['repor', 'Repor'], ['clicados', 'Mais clicados'], ['naoConvertem', 'Olham e não compram'], ['encalhados', 'Vendem pouco'], ['ninguem', 'Ninguém olha']];
+function desempenho() {
+  const ini = inicioPeriodo();
+  const semDias = !S.dias.length;
+  const d = somaDias(ini);
+  const vend = {}, vend30 = {};
+  S.movs.forEach((m) => {
+    if (m.tipo !== 'venda') return;
+    if (m.data >= ini) vend[m.produtoId] = (vend[m.produtoId] || 0) + m.qtd;
+    if (m.data >= Date.now() - 30 * DIA) vend30[m.produtoId] = (vend30[m.produtoId] || 0) + m.qtd;
+  });
+  return {
+    semDias,
+    l: S.produtos.map((p) => ({
+      p,
+      views: semDias ? S.stats[p.id]?.views || 0 : d['v_' + p.id] || 0,
+      sac: d['s_' + p.id] || 0,
+      wh: semDias ? S.stats[p.id]?.whats || 0 : d['w_' + p.id] || 0,
+      vend: vend[p.id] || 0, v30: vend30[p.id] || 0, est: totalEstoque(p)
+    }))
+  };
+}
+function blocoDesempenho() {
+  const { semDias, l } = desempenho();
+  const min = Number(S.loja.estoqueMinimo) || 2;
+  const linha = (r, sub, v, vs) => `<button class="linha" data-acao="editar" data-v="${r.p.id}"><img src="${r.p.thumb}" alt=""><div class="m"><div class="t">${esc(r.p.nome)}</div><div class="s">${sub}</div></div><div class="v">${v}<small>${vs}</small></div></button>`;
+  const cliques = (r) => `${r.views} ${r.views === 1 ? 'visita' : 'visitas'}${r.sac ? ` · ${r.sac} na sacola` : ''}${r.wh ? ` · ${r.wh} no WhatsApp` : ''}`;
+  let itens = [], dica = '';
+  if (S.rank === 'repor') {
+    itens = l.map((r) => {
+      const porDia = r.v30 / 30;
+      const dias = porDia ? r.est / porDia : Infinity;
+      const procura = r.views >= 8 || r.sac > 0 || r.wh >= 2;
+      const zerados = r.p.variacoes.filter((v) => v.qtd <= 0).map((v) => v.tam);
+      return { ...r, dias, procura, zerados };
+    }).filter((r) => (r.est === 0 && (r.v30 > 0 || r.procura)) || (r.v30 > 0 && (r.dias <= 21 || r.est <= min)) || (r.est > 0 && r.est <= min && r.procura))
+      .sort((a, b) => a.dias - b.dias || b.v30 - a.v30).slice(0, 8)
+      .map((r) => linha(r,
+        r.est === 0 ? `Esgotado${r.v30 ? ` · vendeu ${r.v30} em 30 dias` : ''}${r.procura ? ` · ${cliques(r)}` : ''}`
+          : `${r.v30 ? `Vende ~${Math.max(1, Math.round(r.v30 / 30 * 7))} por semana` : cliques(r)}${r.zerados.length ? ` · acabou ${r.zerados.slice(0, 4).join(', ')}` : ''}`,
+        r.est === 0 ? '0' : isFinite(r.dias) ? `~${Math.max(1, Math.round(r.dias))} dias` : `${r.est} un`,
+        r.est === 0 ? 'em estoque' : isFinite(r.dias) ? `${r.est} em estoque` : 'em estoque'));
+    dica = 'Quem vende rápido e está acabando, ou esgotou com gente procurando. "Dias" é quanto o estoque dura no ritmo dos últimos 30 dias.';
+  } else if (S.rank === 'clicados') {
+    itens = l.filter((r) => r.views).sort((a, b) => b.views - a.views).slice(0, 8)
+      .map((r) => linha(r, `${r.sac} na sacola · ${r.wh} no WhatsApp · ${r.vend} ${r.vend === 1 ? 'vendida' : 'vendidas'}`, r.views, 'visitas'));
+    dica = 'Os produtos que mais chamam atenção. Bons para anúncio e Stories.';
+  } else if (S.rank === 'naoConvertem') {
+    itens = l.filter((r) => r.views >= 5 && r.vend === 0 && r.est > 0).sort((a, b) => b.views - a.views).slice(0, 8)
+      .map((r) => linha(r, `${cliques(r)} · nenhuma venda`, r.views, 'visitas'));
+    dica = 'Muita gente abre e ninguém compra. Confira preço, fotos, descrição e se tem os tamanhos mais pedidos.';
+  } else if (S.rank === 'encalhados') {
+    itens = l.filter((r) => r.est > 0 && r.vend <= 1).map((r) => ({ ...r, parado: r.est * (custoDe(r.p.id) || precoAtual(r.p) * 0.5) }))
+      .sort((a, b) => a.vend - b.vend || b.parado - a.parado).slice(0, 8)
+      .map((r) => linha(r, `${r.vend ? '1 vendida' : 'Nenhuma venda'} · ${r.est} em estoque`, brl(r.parado), 'parado'));
+    dica = 'Dinheiro parado no estoque (pelo custo). Promoção, combo ou desconto no Pix ajudam a girar.';
+  } else if (S.rank === 'ninguem') {
+    itens = l.filter((r) => r.est > 0 && r.views <= 2).sort((a, b) => a.views - b.views || a.p.criadoEm - b.p.criadoEm).slice(0, 8)
+      .map((r) => linha(r, `${r.est} em estoque · ${r.vend} ${r.vend === 1 ? 'vendida' : 'vendidas'}`, r.views, r.views === 1 ? 'visita' : 'visitas'));
+    dica = 'Quase ninguém abriu. Ponha como destaque, troque a foto da capa ou poste nos Stories com o link.';
+  }
+  return `<div class="bloco"><h2>Desempenho dos produtos <small>${semDias ? 'cliques desde o início' : rotuloPeriodo()}</small></h2>
+    <div class="chips" style="padding:0 0 6px">${RANKS.map(([v, n]) => `<button class="chip ${S.rank === v ? 'on' : ''}" data-acao="rank" data-v="${v}">${n}</button>`).join('')}</div>
+    <p class="muted" style="font-size:13px;margin-bottom:4px">${dica}</p>
+    ${itens.length ? itens.join('') : '<p class="muted" style="padding:14px 0">Nada aqui por enquanto.</p>'}
+  </div>`;
+}
+
+/* ---------- clientes: quem está no site e quem dá para recuperar ---------- */
+// Lista do que dá para chamar no WhatsApp: sacolas abandonadas (com WhatsApp) e pagamentos gerados e não pagos
+function recuperaveis() {
+  const agora = Date.now();
+  const r = [];
+  S.visitantes.forEach((v) => {
+    if (!v.whats || !v.sacola?.length || v.etapa === 'comprou' || agora - v.ultimo < 30 * MIN) return;
+    if (pagouDepois(v.whats, v.sacolaEm || v.ultimo)) return;
+    r.push({ tipo: 'v', id: v.id, nome: v.nome, whats: v.whats, itens: v.sacola, valor: v.valor || 0, quando: v.ultimo, etapa: v.etapa, contatadoEm: v.contatadoEm, contatos: v.contatos || 0 });
+  });
+  S.pedidos.forEach((p) => {
+    if (p.status !== 'aguardando' || agora - p.criadoEm < 30 * MIN || agora - p.criadoEm > 30 * DIA) return;
+    if (pagouDepois(p.cliente?.telefone, p.criadoEm + 60 * MIN)) return;
+    // mesma pessoa já está na lista pela sacola: fica só o pedido, que é mais forte
+    const i = r.findIndex((x) => x.tipo === 'v' && fim8(x.whats) === fim8(p.cliente?.telefone));
+    if (i >= 0) r.splice(i, 1);
+    r.push({ tipo: 'p', id: p.id, nome: p.cliente?.nome, whats: p.cliente?.telefone, itens: p.itens, valor: p.total, quando: p.criadoEm, etapa: 'pagamento', contatadoEm: p.contatadoEm, contatos: p.contatos || 0 });
+  });
+  return r.sort((a, b) => !!a.contatadoEm - !!b.contatadoEm || b.quando - a.quando);
+}
+function interessados() {
+  const agora = Date.now();
+  return S.visitantes.filter((v) => v.whats && !v.sacola?.length && v.etapa !== 'comprou' && v.vistos?.length && agora - v.ultimo > 30 * MIN && !pagouDepois(v.whats, v.ultimo - DIA))
+    .map((v) => ({ tipo: 'v', id: v.id, nome: v.nome, whats: v.whats, vistos: v.vistos, quando: v.ultimo, etapa: 'olhou', contatadoEm: v.contatadoEm, contatos: v.contatos || 0 }))
+    .sort((a, b) => !!a.contatadoEm - !!b.contatadoEm || b.quando - a.quando);
+}
+const ETAPA = { pagamento: ['Gerou o pagamento e não pagou', 'r'], checkout: ['Chegou no pagamento', 'a'], sacola: ['Deixou na sacola', 'a'], whats: ['Mandou o pedido no WhatsApp', 'k'], olhou: ['Olhou e saiu', ''] };
+function chamarResumo() {
+  const l = recuperaveis().filter((r) => !r.contatadoEm);
+  if (!l.length) return '';
+  return `<div class="bloco"><button class="alerta destaque-ped" data-acao="irClientes"><span class="ic k">${icoWhats(22)}</span><span class="m">${l.length} ${l.length === 1 ? 'sacola abandonada' : 'sacolas abandonadas'} para recuperar<small>${esc(l.slice(0, 3).map((r) => (r.nome || 'Sem nome').split(' ')[0]).join(', '))} · ${brl(l.reduce((t, r) => t + r.valor, 0))}</small></span>${ico('voltar', 18).replace('<svg', '<svg style="transform:rotate(180deg);color:var(--tx3)"')}</button></div>`;
+}
+function linhaCliente(r) {
+  const prodsIds = r.itens ? r.itens.map((i) => i.id) : r.vistos.map((v) => v.id);
+  const capa = S.produtos.find((x) => x.id === prodsIds[0])?.thumb || '';
+  const nomeProd = (id, nome) => (S.produtos.find((x) => x.id === id)?.nome || nome || 'Produto').replace(/^(Camisa|Chuteira|Tênis) /, '');
+  const desc = r.itens
+    ? r.itens.slice(0, 2).map((i) => `${nomeProd(i.id, i.nome)} (${i.tam})`).join(', ') + (r.itens.length > 2 ? ` e mais ${r.itens.length - 2}` : '')
+    : r.vistos.slice(0, 2).map((v) => `${nomeProd(v.id)}${v.n > 1 ? ` (${v.n}x)` : ''}`).join(', ') + (r.vistos.length > 2 ? ` e mais ${r.vistos.length - 2}` : '');
+  const [et, cls] = ETAPA[r.etapa] || ['', ''];
+  return `<button class="linha" data-acao="recuperar" data-v="${r.tipo}:${esc(r.id)}"><img src="${capa}" alt=""><div class="m"><div class="t">${esc(r.nome || 'Sem nome')} <span class="muted" style="font-weight:400;font-size:13px">${esc(fmtTel(r.whats || ''))}</span></div><div class="s">${esc(desc)}</div><div style="margin-top:4px">${et ? `<span class="badge ${cls}">${et}</span>` : ''}${r.contatadoEm ? `<span class="badge k">Chamado ${quando(r.contatadoEm)}</span>` : ''}</div></div><div class="v">${r.valor ? brl(r.valor) : ''}<small>${quando(r.quando)}</small></div></button>`;
+}
+function telaClientes() {
+  const agora = Date.now();
+  const ini = inicioPeriodo();
+  const d = somaDias(ini);
+  const vis = S.visitantes.filter((v) => v.ultimo >= ini);
+  const online = S.visitantes.filter((v) => agora - v.ultimo < 4 * MIN).sort((a, b) => b.ultimo - a.ultimo);
+  const compras = S.pedidos.filter((p) => pagoSt(p) && p.criadoEm >= ini).length;
+  const visitantes = d.visitantes || vis.length;
+  // funil pelas fichas (no máximo 30 dias para trás)
+  const funil = [
+    ['Entraram no site', vis.length],
+    ['Abriram um produto', vis.filter((v) => v.vistos?.length).length],
+    ['Puseram na sacola', vis.filter((v) => v.sacolaEm >= ini).length],
+    ['Chegaram no pagamento', vis.filter((v) => v.checkoutEm >= ini).length],
+    ['Compraram', vis.filter((v) => v.comprouEm >= ini).length]
+  ];
+  const fmax = funil[0][1] || 1;
+  // visitantes por dia (até 14 dias, ou o período escolhido se for menor)
+  const nDias = S.periodo === 'hoje' ? 1 : S.periodo === '7' ? 7 : 14;
+  const hoje0 = new Date(); hoje0.setHours(0, 0, 0, 0);
+  const serie = Array.from({ length: nDias }, (_, i) => {
+    const t = hoje0.getTime() - (nDias - 1 - i) * DIA;
+    const dd = S.dias.find((x) => diaTs(x.id) === t) || {};
+    return { t, n: dd.visitantes || 0, c: dd.compras || 0 };
+  });
+  const smax = Math.max(1, ...serie.map((x) => x.n));
+  const origens = Object.entries(d).filter(([k]) => k.startsWith('o_')).map(([k, n]) => [k.slice(2), n]).sort((a, b) => b[1] - a[1]);
+  const omax = origens[0]?.[1] || 1;
+  const rec = recuperaveis(), intr = interessados();
+  const anonimos = S.visitantes.filter((v) => !v.whats && v.sacola?.length && v.etapa !== 'comprou' && agora - v.ultimo > 30 * MIN).length;
+  const lista = S.filtroCli === 'carrinho' ? rec : intr;
+  const semDados = !S.dias.length && !S.visitantes.length;
+
+  return `
+    <div class="adm-h"><h1>Clientes</h1><button class="btn sec mini" data-acao="atualizarCli" style="width:auto;padding:0 14px">Atualizar</button></div>
+    ${chipsPeriodo()}
+    ${semDados ? '<p class="muted" style="padding:4px 16px 0;font-size:14px">O site começa a contar as visitas a partir de agora. Os números aparecem aqui conforme as pessoas entram.</p>' : ''}
+    <div class="kpis">
+      <div class="kpi escuro"><span>Agora no site</span><b>${online.length}</b><small>${online.length ? esc(online.slice(0, 2).map((v) => v.pagina || 'Início').join(' · ')) : 'ninguém nos últimos minutos'}</small></div>
+      <div class="kpi"><span>Visitantes</span><b>${visitantes}</b><small>${d.sessoes || 0} ${d.sessoes === 1 ? 'visita' : 'visitas'} · ${rotuloPeriodo()}</small></div>
+      <div class="kpi"><span>Compraram pelo site</span><b>${compras}</b><small>${visitantes ? `${(compras / visitantes * 100).toFixed(1).replace('.', ',')}% de quem entrou` : '—'}</small></div>
+      <div class="kpi"><span>Deixaram o WhatsApp</span><b>${(d.cadastros || 0)}</b><small>no cupom de primeira compra</small></div>
+    </div>
+
+    <div class="bloco"><h2>Para recuperar <small>chame no WhatsApp</small></h2>
+      <div class="chips" style="padding:0 0 6px">
+        <button class="chip ${S.filtroCli === 'carrinho' ? 'on' : ''}" data-acao="filtroCli" data-v="carrinho">Sacola abandonada · ${rec.length}</button>
+        <button class="chip ${S.filtroCli === 'interesse' ? 'on' : ''}" data-acao="filtroCli" data-v="interesse">Olharam e saíram · ${intr.length}</button>
+      </div>
+      <p class="muted" style="font-size:13px;margin-bottom:4px">${S.filtroCli === 'carrinho'
+        ? 'Quem deixou o WhatsApp, separou peças e não pagou. Toque para mandar uma mensagem pronta, com ou sem cupom.'
+        : 'Quem deixou o WhatsApp, abriu produtos e não pôs nada na sacola. Bom para oferecer um cupom.'}</p>
+      ${lista.length ? lista.slice(0, 40).map(linhaCliente).join('') : '<p class="muted" style="padding:14px 0">Ninguém aqui agora.</p>'}
+      ${anonimos ? `<p class="muted" style="font-size:13px;margin-top:10px">Mais ${anonimos} ${anonimos === 1 ? 'pessoa deixou' : 'pessoas deixaram'} peças na sacola sem informar o WhatsApp. O cupom de primeira compra (aba Loja) ajuda a pegar esse contato.</p>` : ''}
+    </div>
+
+    <div class="duas">
+    <div class="bloco"><h2>Visitantes por dia <small>${nDias === 1 ? 'hoje' : `últimos ${nDias} dias`}</small></h2>
+      <div class="grafico">${serie.map((x) => `<div class="gcol" title="${new Date(x.t).toLocaleDateString('pt-BR')}: ${x.n} visitantes, ${x.c} compras"><span>${x.n || ''}</span><i style="height:${Math.max(2, (x.n / smax) * 100)}%"></i><small>${new Date(x.t).getDate()}</small></div>`).join('')}</div>
+    </div>
+    <div class="bloco"><h2>Caminho até a compra <small>${S.periodo === 'tudo' ? 'últimos 30 dias' : rotuloPeriodo()}</small></h2>
+      ${funil.map(([n, q], i) => `<div class="funil"><div class="fl"><span>${n}</span><b>${q}${i ? ` <small>${pct(q, funil[0][1])}%</small>` : ''}</b></div><div class="bar"><i style="width:${(q / fmax) * 100}%"></i></div></div>`).join('')}
+    </div>
+    </div>
+
+    <div class="duas">
+    <div class="bloco"><h2>De onde vêm</h2>
+      ${origens.length ? origens.map(([o, n]) => `<div class="funil"><div class="fl"><span>${esc(ORIGENS[o] || o)}</span><b>${n} <small>${pct(n, d.sessoes)}%</small></b></div><div class="bar"><i style="width:${(n / omax) * 100}%"></i></div></div>`).join('') : '<p class="muted">Ainda sem visitas no período.</p>'}
+      <p class="muted" style="font-size:13px;margin-top:8px">Dica: no link da bio e dos anúncios, use o endereço com <b>?utm_source=instagram</b> no fim para separar certinho.</p>
+    </div>
+    <div class="bloco"><h2>Agora no site <small>últimos 4 min</small></h2>
+      ${online.length ? online.slice(0, 10).map((v) => `<div class="linha"><div class="m"><div class="t">${esc(v.nome || 'Visitante')} <span class="muted" style="font-weight:400;font-size:13px">${esc(v.aparelho || '')}</span></div><div class="s">Em: ${esc(v.pagina || 'Início')}${v.sacola?.length ? ` · ${v.sacola.reduce((t, i) => t + i.qtd, 0)} na sacola` : ''}</div></div><div class="v"><small>${esc(ORIGENS[v.origem] || '')}</small></div></div>`).join('') : '<p class="muted">Ninguém navegando agora.</p>'}
     </div>
     </div>
     <div style="height:24px"></div>`;
+}
+
+/* ---------- mensagem de recuperação no WhatsApp ---------- */
+function abrirRecuperar(chave) {
+  const [tipo, ...rest] = chave.split(':');
+  const id = rest.join(':');
+  const r = [...recuperaveis(), ...interessados()].find((x) => x.tipo === tipo && x.id === id);
+  if (!r) return toast('Esse cliente já saiu da lista');
+  const ativos = S.cupons.filter((k) => k.ativo !== false);
+  const st = { modelo: r.itens ? 'lembrete' : 'cupom', cupom: ativos[0]?.codigo || '', texto: '' };
+  const primeiro = (r.nome || '').trim().split(' ')[0];
+  const nomeP = (pid, nome) => S.produtos.find((x) => x.id === pid)?.nome || nome || 'a peça';
+  const itens = r.itens || [];
+  const topVisto = r.vistos?.slice().sort((a, b) => b.n - a.n)[0];
+  // link que remonta a sacola no aparelho do cliente (e já aplica o cupom)
+  const linkVolta = (cod) => itens.length
+    ? catalogo + '#volta/' + itens.map((i) => [i.id, i.tam, i.qtd].map((x) => encodeURIComponent(x)).join('~')).join(',') + (cod ? '/' + cod : '')
+    : topVisto ? linkProduto(topVisto.id) : catalogo;
+  const oQue = () => itens.length
+    ? (itens.length === 1 ? `a *${nomeP(itens[0].id, itens[0].nome)}* (${itens[0].tam})` : `${itens.reduce((t, i) => t + i.qtd, 0)} peças`)
+    : topVisto ? `a *${nomeP(topVisto.id)}*` : 'umas peças';
+  const montar = () => {
+    const k = ativos.find((x) => x.codigo === st.cupom);
+    const oi = `Oi${primeiro ? ' ' + primeiro : ''}! Tudo bem? Aqui é da ${S.loja.nome}.`;
+    const pagto = r.etapa === 'pagamento';
+    if (st.modelo === 'lembrete')
+      return `${oi}\n\nVi que você ${pagto ? 'começou o pagamento de' : itens.length ? 'separou' : 'olhou'} ${oQue()} no site e não finalizou. Ficou alguma dúvida de tamanho, frete ou pagamento? Posso te ajudar por aqui.\n\n${itens.length ? 'Sua sacola continua salva:' : 'O link:'} ${linkVolta('')}`;
+    if (st.modelo === 'cupom')
+      return `${oi}\n\nVi que você ${itens.length ? 'separou' : 'curtiu'} ${oQue()}. Pra te ajudar a fechar, liberei o cupom *${k?.codigo || 'CUPOM'}* com *${k?.pct || 10}% de desconto*${S.loja.pixDesconto ? ` (e no Pix ainda tem ${S.loja.pixDesconto}% a mais)` : ''}.\n\n${itens.length ? 'O link já abre sua sacola com o cupom aplicado:' : 'É só usar no pagamento:'} ${linkVolta(k?.codigo || '')}`;
+    return `${oi}\n\n${itens.length ? `Separei aqui ${oQue()} pra você.` : `Ainda temos ${oQue()}.`} As peças estão saindo rápido e não consigo garantir o tamanho por muito tempo. Quer que eu reserve?\n\n${linkVolta('')}`;
+  };
+  const folha = $('#folha');
+  const desenharF = () => {
+    st.texto = montar();
+    folha.innerHTML = `
+      <div class="folha-h">Chamar ${esc(primeiro || 'cliente')}<button class="icon-btn" data-f="fechar" aria-label="Fechar">${ico('fechar')}</button></div>
+      <div class="folha-c">
+        <div class="muted" style="font-size:14px">${esc(fmtTel(r.whats))} · ${(ETAPA[r.etapa] || [''])[0]} ${quando(r.quando)}${r.valor ? ` · ${brl(r.valor)}` : ''}${r.contatos ? ` · já chamado ${r.contatos}x` : ''}</div>
+        ${itens.length ? `<div style="margin-top:8px">${itens.map((i) => `<div class="linha" style="padding:6px 0"><img src="${S.produtos.find((x) => x.id === i.id)?.thumb || ''}" alt="" style="width:40px;height:40px"><div class="m"><div class="t" style="font-size:14px">${esc(nomeP(i.id, i.nome))}</div><div class="s" style="font-size:13px">${i.qtd}x · ${esc(i.tam)}${i.pers ? ` · ${esc(i.pers)}` : ''}</div></div></div>`).join('')}</div>` : ''}
+        <div class="seg" style="margin-top:14px">${[['lembrete', 'Lembrete'], ['cupom', 'Com cupom'], ['urgencia', 'Últimas peças']].map(([k, n]) => `<button class="${st.modelo === k ? 'on' : ''}" data-modelo="${k}">${n}</button>`).join('')}</div>
+        ${st.modelo === 'cupom' ? (ativos.length
+          ? `<label class="campo"><span>Cupom</span><select class="in" id="rCupom">${ativos.map((k) => `<option value="${esc(k.codigo)}" ${st.cupom === k.codigo ? 'selected' : ''}>${esc(k.codigo)} · ${k.pct}%</option>`).join('')}</select></label>`
+          : `<div class="campo"><span>Cupom</span><button class="btn sec mini" data-f="criarCupom" style="width:auto;padding:0 16px">Criar cupom VOLTA10 (10%)</button></div>`) : ''}
+        <label class="campo"><span>Mensagem (pode editar)</span><textarea class="in" id="rTexto" style="height:190px">${esc(st.texto)}</textarea></label>
+      </div>
+      <div class="folha-f"><button class="btn" data-f="enviar">${icoWhats()} Abrir no WhatsApp</button>${r.contatadoEm ? '' : '<button class="btn sec" data-f="marcar" style="margin-top:8px">Já chamei por fora</button>'}</div>`;
+  };
+  desenharF();
+  $('#veu').classList.add('on'); folha.classList.add('on');
+  $('#veu').onclick = fechar;
+  function fechar() { $('#veu').classList.remove('on'); folha.classList.remove('on'); }
+  async function marcar() {
+    const campos = { contatadoEm: Date.now(), contatos: (r.contatos || 0) + 1 };
+    try {
+      if (r.tipo === 'p') { await api.atualizarPedido(r.id, campos); Object.assign(S.pedidos.find((p) => p.id === r.id) || {}, campos); }
+      else { await api.marcarVisitante(r.id, campos); Object.assign(S.visitantes.find((v) => v.id === r.id) || {}, campos); }
+    } catch (e) { console.error(e); }
+  }
+  folha.oninput = (ev) => { if (ev.target.id === 'rTexto') st.texto = ev.target.value; };
+  folha.onchange = (ev) => { if (ev.target.id === 'rCupom') { st.cupom = ev.target.value; desenharF(); } };
+  folha.onclick = async (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    if (b.dataset.f === 'fechar') return fechar();
+    if (b.dataset.modelo) { st.modelo = b.dataset.modelo; return desenharF(); }
+    if (b.dataset.f === 'criarCupom') {
+      b.disabled = true;
+      const c = { codigo: 'VOLTA10', pct: 10, ativo: true, criadoEm: Date.now() };
+      await api.salvarCupom(c); S.cupons = await api.cupons();
+      ativos.splice(0, ativos.length, ...S.cupons.filter((k) => k.ativo !== false));
+      st.cupom = 'VOLTA10'; toast('Cupom VOLTA10 criado'); return desenharF();
+    }
+    if (b.dataset.f === 'enviar') {
+      const tel = soDigitos(r.whats);
+      window.open(`https://wa.me/${tel.length <= 11 ? '55' + tel : tel}?text=${encodeURIComponent(st.texto)}`, '_blank', 'noopener');
+      await marcar(); fechar(); desenhar();
+      return toast('Marcado como chamado');
+    }
+    if (b.dataset.f === 'marcar') { await marcar(); fechar(); desenhar(); return toast('Marcado como chamado'); }
+  };
 }
 
 /* ---------- pedidos do site ---------- */
@@ -841,6 +1128,151 @@ function formMov(tipo = 'venda', produtoId = '') {
   };
 }
 
+/* ---------- recursos de venda (o que os concorrentes de nicho fazem), todos opcionais ---------- */
+// Cada recurso: { ativo, ate } e campos próprios. "ate" vazio = fica ligado até desligar.
+function recursosHtml(c) {
+  const v = c.vendas || {};
+  const prog = c.progressivo || {};
+  const pers = persDe(c);
+  const hojeIso = new Date().toISOString().slice(0, 10);
+  const rec = (id, titulo, desc, x, corpo = '', comData = true) => {
+    const venceu = x?.ativo && x.ate && !ligado(x);
+    return `<div class="rec ${x?.ativo ? 'on' : ''}">
+      <label class="sw"><span><b>${titulo}</b><small>${desc}</small></span><input type="checkbox" id="${id}On" ${x?.ativo ? 'checked' : ''}></label>
+      <div class="rec-c">
+        ${comData ? `<label class="campo"><span>Ligado até (opcional, para uma ação)</span><input class="in" type="date" id="${id}Ate" min="${hojeIso}" value="${esc(x?.ate || '')}"></label>` : ''}
+        ${venceu ? `<p class="rec-venceu">Terminou em ${x.ate.split('-').reverse().join('/')}. Está desligado no site.</p>` : ''}
+        ${corpo}
+      </div></div>`;
+  };
+  const inp = (id, rot, val, ph = '', extra = '') => `<label class="campo"><span>${rot}</span><input class="in" id="${id}" value="${esc(val ?? '')}" placeholder="${esc(ph)}" ${extra}></label>`;
+  const msgs = v.faixa?.msgs || [];
+  const fxs = prog.faixas || [];
+  return `
+      <h2 style="margin-top:28px">Recursos de venda</h2>
+      <p class="muted" style="font-size:14px;margin-bottom:10px">O que as lojas de camisa que mais vendem usam. Tudo opcional: ligue sempre, só numa ação (com data para desligar sozinho) ou deixe desligado.</p>
+
+      ${rec('rcFaixa', 'Faixa de avisos no topo', 'Cupom, Pix, frete ou combo numa faixa fixa em cima do site. As frases se alternam.', v.faixa, `
+        ${[0, 1, 2].map((i) => inp('rcFaixaM' + i, `Frase ${i + 1}`, msgs[i], ['Ex.: 10% OFF na 1ª compra com o cupom B13PRIMEIRA', 'Ex.: 10% de desconto no Pix', 'Ex.: Leve 3, pague 2 em todas as camisas'][i], 'maxlength="80"')).join('')}
+        <button class="btn sec mini" data-l="sugerirFaixa" style="width:auto;padding:0 16px;margin-top:10px">Sugerir com o que está ligado</button>`)}
+
+      ${rec('rcCombo', 'Combo "leve mais, pague menos"', 'O truque número 1 do nicho. Desconto automático pela quantidade de peças. Não soma com cupom: vale o maior.', prog, `
+        ${[0, 1, 2].map((n) => { const fx = fxs[n] || {}; const tipo = fx.pague ? 'pague' : 'pct'; return `<div class="faixa-prog"><span>Levando</span><input class="in" id="cProgQ${n}" inputmode="numeric" value="${fx.qtd || ''}" placeholder="${n ? '' : 3}"><select class="in" id="cProgT${n}"><option value="pague" ${tipo === 'pague' ? 'selected' : ''}>paga</option><option value="pct" ${tipo === 'pct' ? 'selected' : ''}>ganha %</option></select><input class="in" id="cProgV${n}" inputmode="numeric" value="${fx.pague || fx.pct || ''}" placeholder="${n ? '' : 2}"></div>`; }).join('')}
+        <div class="chips" style="padding:8px 0 0"><button class="chip" data-l="combo" data-v="3:2">Leve 3, pague 2</button><button class="chip" data-l="combo" data-v="5:3">Leve 5, pague 3</button><button class="chip" data-l="combo" data-v="2:10">Leve 2, ganhe 10%</button></div>
+        <label class="sw"><span>Selo do combo em todos os produtos<small>Ex.: "Leve 3, pague 2" no card e "sai R$ X cada" na página</small></span><input type="checkbox" id="cProgSelo" ${prog.selo !== false ? 'checked' : ''}></label>`)}
+
+      ${rec('rcPix', 'Selo de desconto no Pix', `"${Number(c.pixDesconto) || 'X'}% OFF no Pix" no card de cada produto. O desconto em si é o de Pagamento online.`, v.pixSelo)}
+
+      ${rec('cPers', 'Personalização (nome e número)', 'Upsell de maior margem do nicho. Toda camisa ganha a opção de personalizar.', pers, `
+        <div class="dupla">
+          ${inp('cPersPreco', 'Preço do nome e número', fmtNum(Number(pers.preco) || 0), '30,00', 'inputmode="decimal"')}
+          ${inp('cPersMax', 'Letras no nome (máx.)', pers.maxNome, '12', 'inputmode="numeric"')}
+        </div>
+        ${inp('cPersDias', 'Prazo a mais para personalizada (dias úteis)', pers.dias || '', 'Ex.: 2', 'inputmode="numeric"')}
+        <label class="sw"><span>Oferecer patch<small>Ex.: Brasileirão, Libertadores, Champions. O cliente escolhe um.</small></span><input type="checkbox" id="cPatchOn" ${pers.patch?.ativo ? 'checked' : ''}></label>
+        <div class="dupla">
+          ${inp('cPatchPreco', 'Preço do patch', fmtNum(Number(pers.patch?.preco) || 0), '25,00', 'inputmode="decimal"')}
+          ${inp('cPatchNomes', 'Patches (separe por vírgula)', pers.patch?.nomes || '', 'Brasileirão, Libertadores')}
+        </div>`)}
+
+      ${rec('rcProva', 'Prova social (contra o medo de golpe)', 'Fotos de clientes e de pedidos enviados, número de pedidos e tempo de loja. Aparece no início e no produto.', v.prova, `
+        ${inp('rcProvaTit', 'Título da seção', v.prova?.titulo, 'Clientes B13')}
+        <div class="dupla">
+          ${inp('rcProvaPed', 'Pedidos enviados (só se for real)', v.prova?.pedidos, 'Ex.: +1.200')}
+          ${inp('rcProvaDesde', 'Loja desde', v.prova?.desde, 'Ex.: 2019')}
+        </div>
+        <div class="dupla">
+          ${inp('rcProvaCnpj', 'CNPJ (opcional)', v.prova?.cnpj, '00.000.000/0001-00')}
+          ${inp('rcProvaRA', 'Link do Reclame Aqui (opcional)', v.prova?.reclame, 'https://www.reclameaqui.com.br/empresa/...')}
+        </div>
+        <div class="campo"><span>Fotos (clientes vestindo, pacotes, prints com autorização)</span><div class="fotos" id="provaFotos">${provaFotosHtml()}</div></div>`)}
+
+      ${rec('rcPrazo', 'Prazo e pronta entrega', 'Diz quando o pedido sai. Bate o prazo de 15 a 25 dias dos importadores.', v.prazo, `
+        ${inp('rcPrazoTxt', 'Frase do prazo', v.prazo?.texto, 'Ex.: Pronta entrega: enviamos em até 2 dias úteis')}
+        <label class="sw"><span>Selo "Pronta entrega" nos produtos com estoque</span><input type="checkbox" id="rcPronta" ${v.prazo?.pronta ? 'checked' : ''}></label>`, false)}
+
+      ${rec('rcTrocas', 'Política de troca em destaque', 'Tira o maior medo: errar o tamanho. Aparece no produto e na sacola.', v.trocas, `
+        ${inp('rcTrocasTxt', 'Frase', v.trocas?.texto, 'Ex.: 1ª troca de tamanho grátis em até 7 dias')}`, false)}
+
+      ${rec('rcDuvida', 'Botão "dúvida no tamanho?"', 'Atalho para o WhatsApp dentro da página do produto, já com o nome da camisa.', v.duvida, `
+        ${inp('rcDuvidaTxt', 'Texto do botão', v.duvida?.texto, 'Dúvida no tamanho? Chama no WhatsApp')}`, false)}
+
+      ${rec('rcGuia', 'Dica de tamanho da versão jogador', 'Aparece no produto e no guia de tamanhos das camisas versão jogador.', v.guia, `
+        ${inp('rcGuiaTxt', 'Dica', v.guia?.dica, 'A versão jogador veste justa: pegue 1 tamanho acima')}`, false)}
+
+      ${rec('rcCol', 'Coleções (retrô por memória)', 'Atalhos no início do site, como "Copa de 2002" ou "Ídolos". Cada linha: nome da coleção, dois-pontos e as palavras que acham as camisas.', v.colecoes, `
+        <label class="campo"><span>Coleções (uma por linha)</span><textarea class="in" id="rcColTxt" placeholder="Copa de 2002: 2002&#10;Anos 90: 1990, 1994, 1998&#10;Ídolos: Ronaldo, Romário, Zico">${esc(v.colecoes?.texto || '')}</textarea></label>`)}
+
+      ${rec('rcEsc', 'Avisos de estoque', '"Últimas unidades" e "restam só 2 nesse tamanho". Sempre com o estoque real.', { ativo: v.escassez?.ativo !== false }, '', false)}`;
+}
+function provaFotosHtml() {
+  const ids = S.loja.vendas?.prova?.fotoIds || [];
+  const fs = ids.map((id) => S.provaFotos?.[id]).filter(Boolean);
+  return fs.map((f) => `<div class="foto"><img src="${f.thumb}" alt=""><button class="x" data-l="tirarFotoProva" data-v="${f.id}" aria-label="Tirar foto">${ico('fechar', 14)}</button></div>`).join('') +
+    (ids.length < 12 ? `<label class="foto add">${ico('camera', 22)}<span>Adicionar</span><input type="file" accept="image/*" multiple id="provaInput"></label>` : '');
+}
+function lerRecursos(v) {
+  const on = (id) => !!$('#' + id + 'On')?.checked;
+  const ate = (id) => $('#' + id + 'Ate')?.value || '';
+  const vendas = S.loja.vendas || {};
+  const faixas = [0, 1, 2].map((n) => {
+    const qtd = parseInt(v('cProgQ' + n)) || 0, val = parseInt(v('cProgV' + n)) || 0, tipo = $('#cProgT' + n).value;
+    if (qtd < 2 || val <= 0) return null;
+    if (tipo === 'pague') { if (val >= qtd) return null; return { qtd, pague: val, pct: Math.round((qtd - val) / qtd * 10000) / 100 }; }
+    return { qtd, pct: Math.min(50, val) };
+  }).filter(Boolean).filter((f) => f.pct <= 60);
+  const colecoes = v('rcColTxt').split('\n').map((l) => { const [nome, ...t] = l.split(':'); return { nome: nome.trim().slice(0, 40), termos: t.join(':').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 10) }; }).filter((x) => x.nome && x.termos.length).slice(0, 10);
+  return {
+    progressivo: { ativo: on('rcCombo'), ate: ate('rcCombo'), selo: $('#cProgSelo').checked, faixas },
+    pers: { ativo: on('cPers'), ate: ate('cPers'), preco: num(v('cPersPreco')), maxNome: Math.min(15, Math.max(4, parseInt(v('cPersMax')) || 12)), dias: Math.min(30, Math.max(0, parseInt(v('cPersDias')) || 0)),
+      patch: { ativo: $('#cPatchOn').checked, preco: num(v('cPatchPreco')), nomes: v('cPatchNomes').slice(0, 200) } },
+    vendas: {
+      faixa: { ativo: on('rcFaixa'), ate: ate('rcFaixa'), msgs: [0, 1, 2].map((i) => v('rcFaixaM' + i).slice(0, 80)).filter(Boolean) },
+      pixSelo: { ativo: on('rcPix'), ate: ate('rcPix') },
+      prova: { ativo: on('rcProva'), ate: ate('rcProva'), titulo: v('rcProvaTit').slice(0, 40), pedidos: v('rcProvaPed').slice(0, 20), desde: v('rcProvaDesde').slice(0, 10), cnpj: v('rcProvaCnpj').slice(0, 20), reclame: /^https:\/\//.test(v('rcProvaRA')) ? v('rcProvaRA').slice(0, 200) : '', fotoIds: vendas.prova?.fotoIds || [] },
+      prazo: { ativo: on('rcPrazo'), texto: v('rcPrazoTxt').slice(0, 80), pronta: $('#rcPronta').checked },
+      trocas: { ativo: on('rcTrocas'), texto: v('rcTrocasTxt').slice(0, 80) },
+      duvida: { ativo: on('rcDuvida'), texto: v('rcDuvidaTxt').slice(0, 50) },
+      guia: { ativo: on('rcGuia'), dica: v('rcGuiaTxt').slice(0, 120) },
+      colecoes: { ativo: on('rcCol'), ate: ate('rcCol'), texto: v('rcColTxt').slice(0, 800), lista: colecoes },
+      escassez: { ativo: on('rcEsc') }
+    }
+  };
+}
+// faixa do topo: sugere frases a partir do que já está ligado
+function sugerirFaixa() {
+  const c = S.loja, v = (id) => $('#' + id).value.trim();
+  const ideias = [];
+  const bv = c.boasVindas;
+  const k = S.cupons.find((x) => x.codigo === bv?.cupom && x.ativo !== false);
+  if (k) ideias.push(`${k.pct}% OFF na 1ª compra com o cupom ${k.codigo}`);
+  const fx = (parseInt(v('cProgQ0')) || 0) > 1 && $('#rcComboOn').checked ? { qtd: parseInt(v('cProgQ0')), tipo: $('#cProgT0').value, val: parseInt(v('cProgV0')) } : null;
+  if (fx) ideias.push(fx.tipo === 'pague' ? `Leve ${fx.qtd}, pague ${fx.val} em todo o site` : `Leve ${fx.qtd} peças e ganhe ${fx.val}% de desconto`);
+  if (Number(c.pixDesconto)) ideias.push(`${c.pixDesconto}% de desconto no Pix`);
+  if (Number(c.freteGratisAcima)) ideias.push(`Frete grátis acima de ${brl(Number(c.freteGratisAcima))}`);
+  if ($('#rcPrazoOn').checked && v('rcPrazoTxt')) ideias.push(v('rcPrazoTxt'));
+  if ($('#rcTrocasOn').checked && v('rcTrocasTxt')) ideias.push(v('rcTrocasTxt'));
+  ideias.push(`Parcele em até ${Number(c.parcelasMax) || 12}x no cartão`);
+  [0, 1, 2].forEach((i) => ($('#rcFaixaM' + i).value = ideias[i] || ''));
+  $('#rcFaixaOn').checked = true;
+  toast('Frases sugeridas. Confira e salve.');
+}
+
+// fotos da prova social: salvam na hora (não esperam o botão Salvar)
+async function carregarFotosProva() {
+  const ids = (S.loja.vendas?.prova?.fotoIds || []).filter((id) => !S.provaFotos?.[id]);
+  if (!ids.length) return;
+  (await api.fotosLoja(ids).catch(() => [])).forEach((f) => ((S.provaFotos ||= {})[f.id] = f));
+  const el = $('#provaFotos'); if (el) el.innerHTML = provaFotosHtml();
+}
+async function salvarFotosProva(ids) {
+  const vendas = { ...(S.loja.vendas || {}) };
+  vendas.prova = { ...(vendas.prova || {}), fotoIds: ids };
+  await api.salvarConfig({ vendas });
+  S.loja.vendas = vendas;
+  const el = $('#provaFotos'); if (el) el.innerHTML = provaFotosHtml();
+}
+
 /* ---------- loja ---------- */
 // times e ligas que têm produto, para escolher a campanha
 function alvosCampanha(atual = '') {
@@ -874,6 +1306,23 @@ function telaLoja() {
       S.cupons = await api.cupons(); $('#listaCupons').innerHTML = cuponsHtml();
       toast(ev.target.checked ? `Cupom ${cod} ligado` : `Cupom ${cod} desligado`);
     });
+    carregarFotosProva();
+    $('#app .adm').addEventListener('change', async (ev) => {
+      if (ev.target.id !== 'provaInput') return;
+      const arqs = [...ev.target.files].slice(0, 12);
+      toast('Enviando fotos…');
+      const novos = [];
+      for (const f of arqs) {
+        try {
+          const [full, thumb] = await Promise.all([comprimir(f, 900, 0.72), comprimir(f, 360, 0.7)]);
+          const id = await api.salvarFotoLoja({ full, thumb });
+          (S.provaFotos ||= {})[id] = { id, full, thumb }; novos.push(id);
+        } catch (e) { console.error(e); }
+      }
+      await salvarFotosProva([...(S.loja.vendas?.prova?.fotoIds || []), ...novos].slice(0, 12));
+      toast(novos.length ? `${novos.length} ${novos.length === 1 ? 'foto adicionada' : 'fotos adicionadas'}` : 'Não deu para enviar as fotos');
+    });
+    $('#app .adm').addEventListener('change', (ev) => { const r = ev.target.closest('.rec'); if (r && ev.target.matches('.rec > .sw input')) r.classList.toggle('on', ev.target.checked); });
     $('#rCep').addEventListener('change', async () => {
       if (soDigitos($('#rCep').value).length !== 8) return;
       const e = await buscarEndereco($('#rCep').value);
@@ -892,12 +1341,14 @@ function telaLoja() {
           cepOrigem: soDigitos(v('cCepOrigem')), retirada: $('#cRetirada').checked, enderecoRetirada: v('cEndRet'), entregaLocal: $('#cLocal').checked,
           valorEntregaLocal: num(v('cValLocal')), cepsLocais: v('cCepsLocais'), freteGratisAcima: num(v('cGratis')), parcelasSemJuros: Math.min(12, Math.max(0, parseInt(v('cParcelas')) || 0)),
           pixDesconto: Math.min(30, Math.max(0, parseInt(v('cPix')) || 0)), parcelasMax: Math.min(12, Math.max(1, parseInt(v('cParcMax')) || 12)),
-          progressivo: { ativo: $('#cProgOn').checked, faixas: [1, 2, 3].map((n) => ({ qtd: parseInt(v('cProgQ' + n)) || 0, pct: Math.min(50, parseInt(v('cProgP' + n)) || 0) })).filter((x) => x.qtd > 1 && x.pct > 0) },
-          pers: { ativo: $('#cPersOn').checked, preco: num(v('cPersPreco')), maxNome: Math.min(15, Math.max(4, parseInt(v('cPersMax')) || 12)) },
+          ...lerRecursos(v),
           boasVindas: { ativo: $('#cBvOn').checked, cupom: $('#cBvCupom').value, titulo: v('cBvTitulo'), texto: v('cBvTexto') },
           pixelMeta: soDigitos(v('cPixel')) };
         if (nova.boasVindas.ativo && !nova.boasVindas.cupom) return toast('Escolha o cupom da primeira compra');
-        if (nova.progressivo.ativo && !nova.progressivo.faixas.length) return toast('Preencha pelo menos uma faixa do desconto progressivo');
+        if (nova.progressivo.ativo && !nova.progressivo.faixas.length) return toast('Preencha pelo menos uma faixa do combo (ex.: levando 3, paga 2)');
+        if (nova.pers.patch.ativo && !patchesDe(nova.pers).length) return toast('Escreva os nomes dos patches, separados por vírgula');
+        if (nova.vendas.faixa.ativo && !nova.vendas.faixa.msgs.length) return toast('Escreva pelo menos uma frase para a faixa do topo');
+        if (nova.vendas.colecoes.ativo && !nova.vendas.colecoes.lista.length) return toast('Escreva as coleções assim: Copa de 2002: 2002');
         nova.campanha = { ativa: $('#cpgAtiva').checked, alvo: $('#cpgAlvo').value, titulo: v('cpgTitulo'), texto: v('cpgTexto'), cupom: $('#cpgCupom').value };
         if (nova.campanha.ativa && !nova.campanha.alvo) return toast('Escolha o time ou a liga da campanha');
         if (nova.whatsapp.length < 12) return toast('Coloque o WhatsApp com DDI e DDD, ex.: 5573999999999');
@@ -928,6 +1379,20 @@ function telaLoja() {
         if (!confirm(`Apagar o cupom ${b.dataset.cod}? Quem tentar usar vai ver "cupom inválido".`)) return;
         await api.excluirCupom(b.dataset.cod); S.cupons = await api.cupons(); $('#listaCupons').innerHTML = cuponsHtml();
         return toast('Cupom apagado');
+      }
+      if (a === 'sugerirFaixa') return sugerirFaixa();
+      if (a === 'combo') {
+        const [q, val] = b.dataset.v.split(':').map(Number);
+        const pague = val < q;
+        $('#cProgQ0').value = q; $('#cProgT0').value = pague ? 'pague' : 'pct'; $('#cProgV0').value = val;
+        [1, 2].forEach((n) => { $('#cProgQ' + n).value = ''; $('#cProgV' + n).value = ''; });
+        $('#rcComboOn').checked = true;
+        return toast('Combo preenchido. Salve para valer.');
+      }
+      if (a === 'tirarFotoProva') {
+        const ids = (S.loja.vendas?.prova?.fotoIds || []).filter((x) => x !== b.dataset.v);
+        await salvarFotosProva(ids); api.excluirFotoLoja(b.dataset.v).catch(() => {});
+        return toast('Foto tirada');
       }
       if (a === 'copiarLeads') return copiar(S.leads.map((l) => `${l.nome || 'Sem nome'}\t${l.whats}\t${new Date(l.criadoEm).toLocaleDateString('pt-BR')}`).join('\n'), `${S.leads.length} contatos copiados. Cole numa planilha.`);
       if (a === 'sair') api.sair();
@@ -989,18 +1454,7 @@ function telaLoja() {
       </div>
       <p class="muted" style="font-size:12px;margin:-4px 0 12px">O site mostra "R$ X no Pix" e "ou R$ Y em até 12x" em todos os produtos. 0 = sem desconto no Pix.</p>
       <label class="campo"><span>Parcelas sem juros para o cliente</span><input class="in" id="cParcelas" inputmode="numeric" value="${Number(c.parcelasSemJuros) || 0}" placeholder="0"><small class="muted" style="font-size:12px">A loja paga a taxa dessas parcelas. Precisa da chave de API da InfinitePay. 0 = o cliente paga os juros.</small></label>
-      <h2 style="margin-top:28px">Desconto progressivo</h2>
-      <p class="muted" style="font-size:14px;margin-bottom:10px">Quanto mais peças, mais desconto. Não soma com cupom: vale o maior.</p>
-      <label class="sw"><span>Desconto progressivo ligado</span><input type="checkbox" id="cProgOn" ${prog.ativo ? 'checked' : ''}></label>
-      ${[1, 2, 3].map((n) => { const fx = prog.faixas?.[n - 1] || {}; return `<div class="faixa-prog"><span>Levando</span><input class="in" id="cProgQ${n}" inputmode="numeric" value="${fx.qtd || ''}" placeholder="${n + 1}"><span>peças ou mais:</span><input class="in" id="cProgP${n}" inputmode="numeric" value="${fx.pct || ''}" placeholder="${n * 5}"><span>%</span></div>`; }).join('')}
-
-      <h2 style="margin-top:28px">Personalização (nome e número)</h2>
-      <p class="muted" style="font-size:14px;margin-bottom:10px">Quando ligada, toda camisa ganha a opção de personalizar. O pedido chega com o nome e o número para você mandar fazer.</p>
-      <label class="sw"><span>Personalização ligada</span><input type="checkbox" id="cPersOn" ${pers.ativo ? 'checked' : ''}></label>
-      <div class="dupla">
-        <label class="campo"><span>Preço da personalização</span><input class="in" id="cPersPreco" inputmode="decimal" value="${fmtNum(Number(pers.preco) || 0)}" placeholder="30,00"></label>
-        <label class="campo"><span>Letras no nome (máx.)</span><input class="in" id="cPersMax" inputmode="numeric" value="${pers.maxNome}"></label>
-      </div>
+      ${recursosHtml(c)}
 
       <h2 style="margin-top:28px">Cupom de primeira compra</h2>
       <p class="muted" style="font-size:14px;margin-bottom:10px">Uma janela aparece uma vez para quem entra no site: a pessoa deixa o WhatsApp e ganha o cupom. Crie o cupom antes, aqui embaixo em "Cupons de desconto".</p>

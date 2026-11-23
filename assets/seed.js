@@ -183,3 +183,48 @@ export function pedidosDemo(s) {
       { rastreio: 'AA123456789BR', pagamento: { metodo: 'credit_card', parcelas: 3, recibo: '' } })
   ];
 }
+
+// Visitas, cliques e clientes de exemplo para a aba Clientes do painel (modo demonstração).
+// Sorteio com semente fixa: a demonstração mostra sempre os mesmos números.
+export function rastreioDemo(s) {
+  let sem = 13;
+  const rnd = () => ((sem = (sem * 16807) % 2147483647) / 2147483647);
+  const ps = Object.values(s.produtos);
+  const peso = ps.map((p, i) => 1 / (1 + i * 0.35) + (p.destaque ? 0.6 : 0));
+  const sortear = () => { let r = rnd() * peso.reduce((a, b) => a + b, 0); for (let i = 0; i < ps.length; i++) if ((r -= peso[i]) <= 0) return ps[i]; return ps[0]; };
+  const dia = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const dias = {};
+  const origens = [['instagram', 0.52], ['whatsapp', 0.2], ['direto', 0.14], ['google', 0.08], ['facebook', 0.06]];
+  for (let k = 29; k >= 0; k--) {
+    const t = Date.now() - k * 86400000;
+    const fimDeSemana = [0, 6].includes(new Date(t).getDay());
+    const vis = Math.round((28 + rnd() * 22 + (fimDeSemana ? 18 : 0)) * (k === 0 ? 0.45 : 1));
+    const o = { visitantes: vis, sessoes: Math.round(vis * 1.25), cadastros: Math.round(vis * 0.06), checkout: Math.round(vis * 0.07), compras: Math.round(vis * 0.025), pedidoWhats: Math.round(vis * 0.03) };
+    origens.forEach(([n, f]) => (o['o_' + n] = Math.round(o.sessoes * f * (0.8 + rnd() * 0.4))));
+    for (let i = 0; i < vis * 2.2; i++) {
+      const p = sortear();
+      o['v_' + p.id] = (o['v_' + p.id] || 0) + 1;
+      if (rnd() < 0.09) o['s_' + p.id] = (o['s_' + p.id] || 0) + 1;
+      if (rnd() < 0.04) o['w_' + p.id] = (o['w_' + p.id] || 0) + 1;
+    }
+    dias[dia(t)] = o;
+  }
+  const h = 3600000, agora = Date.now();
+  const it = (p, qtd = 1) => { const v = p.variacoes.find((x) => x.qtd > 0) || p.variacoes[0]; return { id: p.id, nome: p.nome, tam: v.tam, qtd, preco: p.promo && p.promo < p.preco ? p.promo : p.preco }; };
+  const ficha = (nome, whats, horas, etapa, itens, vistos, extra = {}) => ({
+    criadoEm: agora - (horas + 30) * h, ultimo: agora - horas * h, visitas: 2, nome, whats, etapa, origem: 'instagram', aparelho: 'celular', pagina: 'Finalizar compra',
+    sacola: itens, valor: itens.reduce((t, i) => t + i.preco * i.qtd, 0), vistos: vistos.map((p, i) => ({ id: p.id, n: 3 - Math.min(i, 2), t: agora - horas * h })),
+    ...(itens.length ? { sacolaEm: agora - (horas + 0.2) * h } : {}), ...(etapa === 'checkout' ? { checkoutEm: agora - horas * h } : {}), ...extra
+  });
+  const visitantes = {
+    demoV1: ficha('Lucas Andrade', '73991234567', 2, 'checkout', [it(ps[1]), it(ps[4])], [ps[1], ps[4], ps[6]]),
+    demoV2: ficha('Marina Costa', '71987654321', 20, 'sacola', [it(ps[2])], [ps[2], ps[0]]),
+    demoV3: ficha('Pedro Henrique', '73988112233', 50, 'sacola', [it(ps[5], 2)], [ps[5]], { contatadoEm: agora - 30 * h, contatos: 1 }),
+    demoV4: ficha('Camila Rocha', '75999887766', 6, 'navegando', [], [ps[3], ps[3], ps[7]]),
+    demoV5: ficha('Thiago', '73981110000', 30, 'navegando', [], [ps[0], ps[9] || ps[1]]),
+    demoV6: ficha('', '', 1, 'sacola', [it(ps[6])], [ps[6]]),
+    demoV7: { criadoEm: agora - 5 * 60000, ultimo: agora - 60000, visitas: 1, etapa: 'navegando', origem: 'instagram', aparelho: 'celular', pagina: ps[0].nome, vistos: [{ id: ps[0].id, n: 1, t: agora - 60000 }] },
+    demoV8: { criadoEm: agora - 9 * 60000, ultimo: agora - 2 * 60000, visitas: 3, nome: 'Bruno', whats: '73992223333', etapa: 'sacola', origem: 'whatsapp', aparelho: 'celular', pagina: 'Sacola', sacola: [it(ps[2])], valor: it(ps[2]).preco, vistos: [{ id: ps[2].id, n: 2, t: agora - 3 * 60000 }] }
+  };
+  return { dias, visitantes };
+}

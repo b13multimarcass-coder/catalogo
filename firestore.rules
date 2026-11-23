@@ -1,6 +1,7 @@
 rules_version = '2';
 // Regras do catálogo B13.
-// Público: lê produtos, fotos e dados da loja; só pode somar +1 em visitas e cliques.
+// Público: lê produtos, fotos e dados da loja; só pode somar +1 em visitas e cliques
+// e escrever a própria ficha de visitante (sem ler nada).
 // Lojista: quem tiver um documento em admins/{uid} (criado à mão no console).
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -32,6 +33,48 @@ service cloud.firestore {
     // pedidos do site: só o servidor (conta de serviço, que não passa por estas regras) cria;
     // o lojista lê e muda o andamento (enviado, entregue, cancelado)
     match /pedidos/{id}    { allow read, update: if admin(); allow create, delete: if false; }
+
+    // rastreio do site, um documento por dia (2026-11-23): visitantes, sessões, origem e,
+    // por produto, v_ (visto), s_ (pôs na sacola), w_ (chamou no WhatsApp). Público só soma +1.
+    function chaveDia(k) {
+      return k.matches('^(sessoes|visitantes|checkout|compras|pedidoWhats|cadastros|[vsw]_[A-Za-z0-9_-]{1,40}|o_[a-z]{1,15})$');
+    }
+    function novaChave(ks, i) { return ks.size() <= i || (chaveDia(ks[i]) && request.resource.data[ks[i]] == 1); }
+    function somaUm(ks, i) { return ks.size() <= i || (chaveDia(ks[i]) && request.resource.data[ks[i]] == resource.data.get(ks[i], 0) + 1); }
+    match /dias/{dia} {
+      allow read, delete: if admin();
+      allow create: if dia.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.keys().size() <= 4
+        && novaChave(request.resource.data.keys(), 0) && novaChave(request.resource.data.keys(), 1)
+        && novaChave(request.resource.data.keys(), 2) && novaChave(request.resource.data.keys(), 3);
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().size() <= 4
+        && somaUm(request.resource.data.diff(resource.data).affectedKeys().toList(), 0)
+        && somaUm(request.resource.data.diff(resource.data).affectedKeys().toList(), 1)
+        && somaUm(request.resource.data.diff(resource.data).affectedKeys().toList(), 2)
+        && somaUm(request.resource.data.diff(resource.data).affectedKeys().toList(), 3);
+    }
+
+    // ficha de cada visitante (id aleatório guardado no aparelho): o que viu, a sacola e, se ele
+    // informou, nome e WhatsApp. Serve para recuperar carrinho. O visitante escreve a própria
+    // ficha, mas não lê nada; só o lojista lê e marca "contatado".
+    function fichaOk() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['criadoEm', 'ultimo', 'visitas', 'nome', 'whats', 'sacola', 'valor', 'vistos', 'etapa', 'origem', 'aparelho', 'pagina', 'sacolaEm', 'checkoutEm', 'comprouEm', 'pedido', 'contatadoEm', 'contatos'])
+        && d.ultimo is number
+        && (!('sacola' in d) || (d.sacola is list && d.sacola.size() <= 30))
+        && (!('vistos' in d) || (d.vistos is list && d.vistos.size() <= 15))
+        && (!('nome' in d) || (d.nome is string && d.nome.size() <= 60))
+        && (!('whats' in d) || (d.whats is string && d.whats.size() <= 13))
+        && (!('pagina' in d) || (d.pagina is string && d.pagina.size() <= 80))
+        && (!('etapa' in d) || d.etapa in ['navegando', 'sacola', 'checkout', 'whats', 'comprou']);
+    }
+    match /visitantes/{vid} {
+      allow read, delete: if admin();
+      allow create: if vid.matches('^[A-Za-z0-9]{16,32}$') && fichaOk()
+        && !request.resource.data.keys().hasAny(['contatadoEm', 'contatos']);
+      allow update: if admin() || (fichaOk()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['contatadoEm', 'contatos', 'criadoEm']));
+    }
 
     match /stats/{id} {
       allow read: if admin();

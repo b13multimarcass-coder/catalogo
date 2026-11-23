@@ -83,9 +83,11 @@ function opcoesLocais(cfg, cep, subtotal) {
 // Regras de preço do pedido. A MESMA função está em assets/data.js e em servidor/worker.js: mude nos dois.
 // linhas: [{ preco (já com promoção e personalização), qtd }]. Ordem: maior entre cupom e desconto
 // progressivo (não somam) e, por cima, o desconto do Pix.
+const ateFim = (ate) => (ate && /^\d{4}-\d{2}-\d{2}$/.test(ate) ? Date.parse(ate + 'T23:59:59-03:00') : Infinity);
+const ligado = (x) => !!x?.ativo && Date.now() <= ateFim(x.ate);
 function faixaProgressiva(cfg, pecas) {
   const p = cfg.progressivo;
-  if (!p?.ativo) return null;
+  if (!ligado(p)) return null;
   return (p.faixas || []).filter((f) => f.qtd > 1 && f.pct > 0 && pecas >= f.qtd).sort((a, b) => b.pct - a.pct)[0] || null;
 }
 function calcularPedido(cfg, linhas, cupom, metodo) {
@@ -117,12 +119,16 @@ async function lerSacola(env, itens, cfg) {
     if (estoque < qtd) throw falha(`${p.data.nome} (${i.tam}) tem só ${Math.max(0, estoque)} em estoque`);
     const l = { id: p.id, nome: p.data.nome, categoria: p.data.categoria, tam: i.tam, qtd, preco: precoAtual(p.data) };
     if (i.pers) {
-      if (!pers.ativo || p.data.categoria !== 'camisa') throw falha('A personalização não está disponível agora');
+      if (!ligado(pers) || p.data.categoria !== 'camisa') throw falha('A personalização não está disponível agora');
       const nome = String(i.pers.nome || '').toUpperCase().replace(/[^A-ZÀ-Ú .'-]/g, '').trim().slice(0, Number(pers.maxNome) || 12);
       const numero = String(i.pers.numero || '').replace(/\D/g, '').slice(0, 2);
-      if (!nome && !numero) throw falha('Preencha o nome ou o número da personalização');
-      l.pers = { nome, numero };
-      l.preco = Math.round((l.preco + (Number(pers.preco) || 0)) * 100) / 100;
+      // patch: só os que o lojista oferece (mesma regra de patchesDe em assets/data.js)
+      const patches = pers.patch?.ativo ? String(pers.patch.nomes || '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 8) : [];
+      const patch = i.pers.patch ? String(i.pers.patch) : '';
+      if (patch && !patches.includes(patch)) throw falha('Esse patch não está disponível agora');
+      if (!nome && !numero && !patch) throw falha('Preencha o nome ou o número da personalização');
+      l.pers = { nome, numero, ...(patch ? { patch } : {}) };
+      l.preco = Math.round((l.preco + (nome || numero ? Number(pers.preco) || 0 : 0) + (patch ? Number(pers.patch.preco) || 0 : 0)) * 100) / 100;
     }
     linhas.push(l);
   }
@@ -218,7 +224,7 @@ async function pagar(env, b, workerUrl) {
     handle: env.INFINITEPAY_HANDLE,
     order_nsu: id,
     items: [
-      ...conta.itens.map((l) => ({ description: `${l.nome} (${l.tam})${l.pers ? ` ${l.pers.nome} ${l.pers.numero}`.trimEnd() : ''}`, price: Math.round(l.final * 100), quantity: l.qtd })),
+      ...conta.itens.map((l) => ({ description: `${l.nome} (${l.tam})${l.pers ? ` ${l.pers.nome} ${l.pers.numero}${l.pers.patch ? ' + patch ' + l.pers.patch : ''}`.replace(/\s+/g, ' ').trimEnd() : ''}`, price: Math.round(l.final * 100), quantity: l.qtd })),
       ...(frete.preco > 0 ? [{ description: `Frete ${frete.nome}`, price: Math.round(frete.preco * 100), quantity: 1 }] : [])
     ],
     redirect_url: `${site}?pedido=${id}`,

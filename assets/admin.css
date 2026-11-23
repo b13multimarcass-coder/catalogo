@@ -96,6 +96,18 @@ textarea.in { height: 96px; padding: 12px 14px; resize: vertical; }
 .ped-l.t { font-weight: 700; font-size: 17px; border-top: 1px solid var(--ln); margin-top: 6px; padding-top: 10px; }
 .alerta .ic.k { color: var(--brand); }
 
+/* clientes: gráfico de visitas e funil */
+.grafico { display: flex; align-items: flex-end; gap: 4px; height: 150px; padding-top: 18px; }
+.gcol { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; min-width: 0; }
+.gcol i { width: 100%; max-width: 28px; background: var(--brand); border-radius: 4px 4px 0 0; }
+.gcol span { font-size: 11px; color: var(--tx2); font-variant-numeric: tabular-nums; margin-bottom: 2px; }
+.gcol small { font-size: 11px; color: var(--tx3); margin-top: 4px; }
+.funil { padding: 7px 0; }
+.funil .fl { display: flex; justify-content: space-between; font-size: 14px; }
+.funil .fl b { font-variant-numeric: tabular-nums; }
+.funil .fl small { color: var(--tx2); font-weight: 400; }
+.alerta .ic.k svg { color: #25a244; }
+
 /* computador: menu lateral fixo e conteúdo mais largo */
 @media (min-width: 1024px) {
   body { padding-bottom: 0; padding-left: 248px; }
@@ -153,4 +165,13 @@ textarea.in { height: 96px; padding: 12px 14px; resize: vertical; }
 
 .faixa-prog { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; color: var(--tx2); }
 .faixa-prog .in { width: 64px; text-align: center; padding: 0 6px; }
+.faixa-prog select.in { width: 104px; text-align: left; padding: 0 10px; }
+/* recursos de venda: cartão com chave; os campos só aparecem com a chave ligada */
+.rec { border: 1px solid var(--ln); border-radius: 16px; padding: 2px 14px; margin-top: 10px; }
+.rec > .sw { border: 0; }
+.rec > .sw b { font-weight: 600; }
+.rec .rec-c { display: none; padding-bottom: 14px; }
+.rec.on { border-color: #c9d1ea; background: #fbfcff; }
+.rec.on .rec-c { display: block; }
+.rec-venceu { font-size: 13px; color: var(--warn); margin-top: 8px; }
 .alerta .ic.a { color: var(--warn); }

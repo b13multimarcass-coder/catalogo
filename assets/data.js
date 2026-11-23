@@ -2,7 +2,7 @@
 // - demo: dados no localStorage, com produtos de exemplo
 // - firebase: Auth + Firestore (plano gratuito). Fotos comprimidas ficam no Firestore.
 import { FB_CFG, FB_HOSTS, LOJA_PADRAO } from './config.js';
-import { seedDemo, pedidosDemo } from './seed.js';
+import { seedDemo, pedidosDemo, rastreioDemo } from './seed.js';
 
 export const modo = FB_CFG && FB_HOSTS.includes(location.hostname) ? 'firebase' : 'demo';
 
@@ -40,6 +40,7 @@ function demoApi() {
   if (!s) s = seedDemo(LOJA_PADRAO);
   s.config = { ...LOJA_PADRAO, ...s.config };
   if (!s.pedidos) s.pedidos = pedidosDemo(s);
+  if (!s.dias) Object.assign(s, rastreioDemo(s));
   const salvar = () => {
     try { localStorage.setItem(KEY, JSON.stringify(s)); }
     catch { throw new Error('O modo demonstração guarda pouca coisa no navegador. Com o Firebase ligado esse limite some.'); }
@@ -121,6 +122,20 @@ function demoApi() {
     async excluirCupom(codigo) { delete (s.cupons || {})[codigo]; salvar(); },
     async salvarRemetente(r) { s.remetente = r; salvar(); },
     async token() { return 'demo'; },
+    // rastreio do site: contadores do dia e ficha de cada visitante
+    async somar(chaves) { const o = ((s.dias ||= {})[diaDe()] ||= {}); chaves.forEach((k) => (o[k] = (o[k] || 0) + 1)); salvar(); },
+    async visitante(vid, dados, novaVisita) {
+      const v = ((s.visitantes ||= {})[vid] ||= { criadoEm: Date.now(), visitas: 0 });
+      Object.assign(v, dados); if (novaVisita) v.visitas++;
+      salvar();
+    },
+    // fotos da loja (prova social: clientes, pedidos enviados)
+    async salvarFotoLoja(f) { const id = novoId('f'); s.fotos[id] = { full: f.full, thumb: f.thumb, loja: 1 }; salvar(); return id; },
+    async excluirFotoLoja(id) { delete s.fotos[id]; salvar(); },
+    async fotosLoja(ids) { return (ids || []).map((id) => ({ id, ...s.fotos[id] })).filter((f) => f.full); },
+    async dias() { return Object.entries(s.dias || {}).map(([id, d]) => ({ id, ...d })); },
+    async visitantes(desde) { return Object.entries(s.visitantes || {}).map(([id, v]) => ({ id, ...v })).filter((v) => v.ultimo >= desde); },
+    async marcarVisitante(id, campos) { Object.assign(s.visitantes?.[id] || {}, campos); salvar(); },
     async resetarDemo() { localStorage.removeItem(KEY); }
   };
 }
@@ -137,7 +152,7 @@ async function firebaseApi() {
   const app = A.initializeApp(FB_CFG);
   const auth = U.getAuth(app);
   const db = F.getFirestore(app);
-  const { doc, collection, getDoc, getDocs, setDoc, deleteDoc, writeBatch, runTransaction, increment } = F;
+  const { doc, collection, getDoc, getDocs, setDoc, deleteDoc, writeBatch, runTransaction, increment, query, where } = F;
 
   const lista = async (nome) => (await getDocs(collection(db, nome))).docs.map((d) => ({ id: d.id, ...d.data() }));
   const mapa = async (nome) => Object.fromEntries((await lista(nome)).map((d) => [d.id, d]));
@@ -225,7 +240,25 @@ async function firebaseApi() {
     async salvarCupom(c) { await setDoc(doc(db, 'cupons', c.codigo), { pct: c.pct, ativo: c.ativo !== false, criadoEm: c.criadoEm || Date.now() }); },
     async excluirCupom(codigo) { await deleteDoc(doc(db, 'cupons', codigo)); },
     async salvarRemetente(r) { await setDoc(doc(db, 'interno', 'remetente'), r); },
-    async token() { return auth.currentUser?.getIdToken(); }
+    async token() { return auth.currentUser?.getIdToken(); },
+    // rastreio do site (regras: só soma +1, no máximo 4 contadores por vez)
+    async somar(chaves) {
+      try { await setDoc(doc(db, 'dias', diaDe()), Object.fromEntries(chaves.slice(0, 4).map((k) => [k, increment(1)])), { merge: true }); } catch {}
+    },
+    async visitante(vid, dados, novaVisita) {
+      try { await setDoc(doc(db, 'visitantes', vid), { ...dados, ...(novaVisita ? { visitas: increment(1) } : {}) }, { merge: true }); } catch {}
+    },
+    async dias() { return lista('dias'); },
+    async salvarFotoLoja(f) { const r = doc(collection(db, 'fotos')); await setDoc(r, { full: f.full, thumb: f.thumb, loja: true }); return r.id; },
+    async excluirFotoLoja(id) { await deleteDoc(doc(db, 'fotos', id)); },
+    async fotosLoja(ids) {
+      const ds = await Promise.all((ids || []).map((id) => getDoc(doc(db, 'fotos', id))));
+      return ds.filter((d) => d.exists()).map((d) => ({ id: d.id, ...d.data() }));
+    },
+    async visitantes(desde) {
+      return (await getDocs(query(collection(db, 'visitantes'), where('ultimo', '>=', desde)))).docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+    async marcarVisitante(id, campos) { await setDoc(doc(db, 'visitantes', id), campos, { merge: true }); }
   };
 }
 
@@ -251,9 +284,14 @@ export function cpfValido(c) {
 // Regras de preço do pedido. A MESMA função está em assets/data.js e em servidor/worker.js: mude nos dois.
 // linhas: [{ preco (já com promoção e personalização), qtd }]. Ordem: maior entre cupom e desconto
 // progressivo (não somam) e, por cima, o desconto do Pix.
+// Recursos ligáveis do painel: { ativo, ate: 'AAAA-MM-DD' (opcional, vale até o fim desse dia, horário de Brasília) }
+export const ateFim = (ate) => (ate && /^\d{4}-\d{2}-\d{2}$/.test(ate) ? Date.parse(ate + 'T23:59:59-03:00') : Infinity);
+export const ligado = (x) => !!x?.ativo && Date.now() <= ateFim(x.ate);
+// "Leve 3, pague 2" quando a faixa foi criada assim; senão "Leve 3 e ganhe 10%"
+export const rotuloFaixa = (f) => (f.pague ? `Leve ${f.qtd}, pague ${f.pague}` : `Leve ${f.qtd} e ganhe ${f.pct}%`);
 export function faixaProgressiva(cfg, pecas) {
   const p = cfg.progressivo;
-  if (!p?.ativo) return null;
+  if (!ligado(p)) return null;
   return (p.faixas || []).filter((f) => f.qtd > 1 && f.pct > 0 && pecas >= f.qtd).sort((a, b) => b.pct - a.pct)[0] || null;
 }
 export function calcularPedido(cfg, linhas, cupom, metodo) {
@@ -270,6 +308,10 @@ export function calcularPedido(cfg, linhas, cupom, metodo) {
   return { itens, pecas, bruto, pct, regra, faixa, cupom: regra === 'cupom' ? cupom : null, desconto: r2(bruto - aposDesc), pix, descontoPix: r2(aposDesc - total), total };
 }
 export const persDe = (cfg) => ({ ativo: false, preco: 30, maxNome: 12, ...(cfg.pers || {}) });
+// patches oferecidos junto da personalização (painel > Loja). Mesma regra em servidor/worker.js.
+export const patchesDe = (pers) => (pers.patch?.ativo ? String(pers.patch.nomes || '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 8) : []);
+// preço de uma peça da sacola: produto (com promoção) + personalização + patch
+export const precoComPers = (base, pers, i) => Math.round((base + (i.pers?.nome || i.pers?.numero ? Number(pers.preco) || 0 : 0) + (i.pers?.patch ? Number(pers.patch?.preco) || 0 : 0)) * 100) / 100;
 export const VERSOES = ['Torcedor', 'Jogador', 'Retrô', 'Feminina', 'Infantil'];
 export const codigoCupom = (t) => String(t || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 30);
 export const STATUS_PEDIDO = {
@@ -277,6 +319,8 @@ export const STATUS_PEDIDO = {
 };
 
 /* ---------------- utilidades ---------------- */
+// dia no fuso do aparelho, ex.: 2026-11-23 (documento dias/{dia})
+export const diaDe = (t = Date.now()) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 export const brl = (n) => (n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export const CATEGORIAS = [
@@ -386,7 +430,8 @@ export const ICO = {
   sacola: '<path d="M5 8h14l-1 12H6z"/><path d="M9 8V6.5a3 3 0 016 0V8"/>',
   baixo: '<path d="M7 10l5 5 5-5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-  menos: '<path d="M5 12h14"/>'
+  menos: '<path d="M5 12h14"/>',
+  pessoas: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><path d="M16 4.6a3.5 3.5 0 010 6.8M18 14a6.5 6.5 0 013.5 6"/>'
 };
 export const ico = (n, s = 22) =>
   `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICO[n]}</svg>`;

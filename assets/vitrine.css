@@ -296,3 +296,29 @@ table.guia td:first-child { font-weight: 700; }
 .bv .cmp { text-align: left; }
 .bv-cod { display: block; width: 100%; border: 2px dashed var(--brand); border-radius: 14px; padding: 16px; font-size: 28px; font-weight: 700; letter-spacing: 2px; color: var(--brand); }
 .bv-cod small { display: block; font-size: 12px; font-weight: 400; letter-spacing: 0; color: var(--tx2); margin-top: 2px; }
+
+/* recursos de venda (painel > Loja > Recursos de venda) */
+.avisos { background: var(--brand); color: #fff; height: 34px; position: relative; overflow: hidden; font-size: 13px; font-weight: 600; text-align: center; }
+.avisos[hidden] { display: none; }
+.avisos span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 16px; opacity: 0; transform: translateY(8px); transition: opacity .35s, transform .35s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.avisos span.on { opacity: 1; transform: none; }
+.selos { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.sl { font-size: 11.5px; font-weight: 600; line-height: 1; padding: 4px 7px; border-radius: 6px; background: #f1f1f1; color: var(--tx2); }
+.sl.combo { background: #fff1dc; color: #8a4f00; }
+.sl.pix { background: #e3f5ea; color: #17733b; }
+.prova-n { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--tx2); margin-top: 10px; }
+.prova-n svg { color: #17733b; flex: none; margin-top: 2px; }
+.prova-n b { color: var(--tx); }
+.prova-n a { color: var(--brand); text-decoration: underline; }
+.faixa.prova .prova-n { padding: 0 16px; margin: -4px 0 12px; }
+.prova-t .pf { width: 100%; aspect-ratio: 4 / 5; border-radius: 14px; overflow: hidden; background: var(--cinza); }
+.prova-t .pf img { width: 100%; height: 100%; object-fit: cover; }
+.info-l { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 0 14px; font-size: 14px; color: var(--tx2); }
+.info-l svg { color: var(--brand); flex: none; }
+.dica-tam { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--tx2); margin-top: 8px; }
+.lnk-duvida { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 14px; font-weight: 600; color: #17733b; }
+.confia { text-align: center; color: var(--tx2); font-size: 13px; }
+.confia .prova-n { justify-content: center; margin-top: 0; }
+.confia p { margin-top: 6px; }
+.chip.col { background: #fff6e6; border-color: #f3dcb0; }
+.pers select { width: 100%; height: 46px; border: 1px solid var(--ln); border-radius: 10px; padding: 0 12px; font-size: 16px; background: #fff; }

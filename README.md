@@ -24,12 +24,16 @@ Para testar no Mac: `python3 -m http.server 8000` dentro desta pasta e abrir htt
 
 ## Estrutura no Firestore
 - `config/loja`: nome, frase, WhatsApp, Instagram, alertas
+  - `vendas`: recursos de venda ligáveis no painel (faixa do topo, selo do Pix, prova social, prazo, trocas, dúvida no WhatsApp, dica de tamanho, coleções, avisos de estoque). Cada um tem `ativo` e, quando faz sentido, `ate` (AAAA-MM-DD): passa da data, desliga sozinho.
+  - `progressivo` (combo: leve 3 pague 2 ou % por quantidade) e `pers` (nome, número e patch) mexem no preço: a regra é a mesma em `assets/data.js` e `servidor/worker.js`.
 - `produtos/{id}`: nome, categoria, time, marca, preço, promoção, variações (tamanho e quantidade), capa
 - `fotos/{id}`: foto grande e miniatura
 - `priv/{id}`: custo (só o lojista lê)
 - `movimentos/{id}`: vendas, entradas e saídas, com o custo da época (o lucro antigo não muda se o custo mudar)
 - `stats/{id}`: visitas e cliques no WhatsApp
 - `pedidos/{id}`: pedidos pagos pelo site (cliente, CPF, endereço, itens, frete, pagamento, etiqueta, andamento). Só o servidor cria.
+- `dias/{AAAA-MM-DD}`: contadores do dia (visitantes, visitas, origem, checkout, compras e, por produto, `v_` vistos, `s_` sacola, `w_` WhatsApp). O público só soma +1.
+- `visitantes/{id}`: ficha de quem navega (o que viu, sacola, etapa e, se a pessoa digitou, nome e WhatsApp). Base da aba Clientes e da recuperação de carrinho. O público escreve a própria ficha e não lê nada.
 - `interno/remetente`: quem envia o pacote (nome, CPF/CNPJ, endereço), usado na etiqueta do Melhor Envio. Só o lojista lê.
 
 ## Identidade visual
