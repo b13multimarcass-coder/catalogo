@@ -21,7 +21,7 @@ export const FB_HOSTS = ['b13multimarcas.com.br', 'www.b13multimarcas.com.br', '
 
 // Endereço do servidor de frete e pagamento (Cloudflare Worker, pasta servidor/).
 // Vazio = frete e pagamento simulados (modo demonstração).
-export const SERVIDOR_URL = '';
+export const SERVIDOR_URL = 'https://b13-loja.b13multimarcass.workers.dev';
 
 // Valores iniciais da loja (editáveis no painel, aba Loja)
 export const LOJA_PADRAO = {
