@@ -178,6 +178,7 @@ function telaPainel() {
       ${esgotados.length && !procurados.length ? alerta('caixa', 'r', `${esgotados.length} esgotado${esgotados.length > 1 ? 's' : ''}`, nomes(esgotados), 'esgotados') : ''}
     </div>` : ''}
 
+    <div class="duas">
     <div class="bloco"><h2>Mais vendidos <small>${PERIODOS.find((x) => x[0] === S.periodo)[1].toLowerCase()}</small></h2>
       ${top.length ? top.map((r) => `
         <button class="linha" data-acao="editar" data-v="${r.id}"><img src="${thumb(r.id)}" alt=""><div class="m"><div class="t">${esc(r.nome)}</div><div class="s">${r.qtd} ${r.qtd === 1 ? 'peça' : 'peças'} · lucro ${brl(r.lucro)}</div><div class="bar"><i style="width:${(r.qtd / maxQ) * 100}%"></i></div></div><div class="v">${brl(r.fat)}</div></button>`).join('') : '<p class="muted">Nenhuma venda nesse período.</p>'}
@@ -186,6 +187,7 @@ function telaPainel() {
     <div class="bloco"><h2>Mais vistos no catálogo <small>desde o início</small></h2>
       ${vistos.map((r) => `
         <button class="linha" data-acao="editar" data-v="${r.p.id}"><img src="${r.p.thumb}" alt=""><div class="m"><div class="t">${esc(r.p.nome)}</div><div class="s">${r.whats} chamaram no WhatsApp (${pct(r.whats, r.views)}%)</div></div><div class="v">${r.views}<small>visitas</small></div></button>`).join('')}
+    </div>
     </div>
     <div style="height:24px"></div>`;
 }
@@ -218,7 +220,7 @@ function telaPedidos() {
     ${pagamentoReal ? '' : '<p class="muted" style="padding:0 16px 8px;font-size:13px">Frete e pagamento ainda simulados. Ligam quando o servidor for configurado (servidor/LEIA-ME.md).</p>'}
     <div class="kpis"><div class="kpi"><span>Pagos em 30 dias</span><b>${pagos30.length}</b><small>${brl(pagos30.reduce((t, p) => t + p.total, 0))} com frete</small></div><div class="kpi"><span>A enviar</span><b>${S.pedidos.filter((p) => p.status === 'pago').length}</b><small>${S.pedidos.filter((p) => p.status === 'aguardando').length} aguardando pagamento</small></div></div>
     <div class="chips" style="padding-top:4px">${FILTROS_PED.map(([v, n]) => `<button class="chip ${S.filtroPed === v ? 'on' : ''}" data-acao="filtroPed" data-v="${v}">${n}</button>`).join('')}</div>
-    <div style="padding:0 16px 24px">${l.length ? l.map((p) => {
+    <div class="lista2" style="padding:0 16px 24px">${l.length ? l.map((p) => {
       const capa = S.produtos.find((x) => x.id === p.itens[0]?.id)?.thumb || '';
       return `<button class="linha" data-acao="pedido" data-v="${esc(p.id)}"><img src="${capa}" alt=""><div class="m"><div class="t">${esc(p.cliente.nome)}</div><div class="s">${pecasDe(p)} ${pecasDe(p) === 1 ? 'peça' : 'peças'} · ${esc(p.frete?.nome || '')} · ${quando(p.criadoEm)}</div><div style="margin-top:4px">${badgeSt(p.status)}</div></div><div class="v">${brl(p.total)}<small>${esc(p.id)}</small></div></button>`;
     }).join('') : '<p class="muted" style="padding:30px 0;text-align:center">Nenhum pedido aqui.</p>'}</div>`;
@@ -285,7 +287,7 @@ function telaProdutos() {
     <div class="adm-h"><h1>Produtos</h1><span class="muted">${S.produtos.length}</span></div>
     <div style="padding:6px 16px 0"><input class="in" id="bProd" type="search" placeholder="Buscar produto" value="${esc(S.busca)}" style="border-radius:999px;background:var(--sf);border-color:var(--sf)"></div>
     <div class="chips">${FILTROS.map(([v, n]) => `<button class="chip ${S.filtroProd === v ? 'on' : ''}" data-acao="filtroProd" data-v="${v}">${n}</button>`).join('')}</div>
-    <div style="padding:0 16px" id="listaProd">${listaProdutos()}</div>
+    <div class="lista2" style="padding:0 16px" id="listaProd">${listaProdutos()}</div>
     <button class="fab" data-acao="novo">${ico('mais', 20)} Novo produto</button>`;
 }
 function listaProdutos() {

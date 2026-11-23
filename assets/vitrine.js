@@ -171,6 +171,11 @@ function ligarHero() {
     const i = Math.round(h.scrollLeft / w);
     d.querySelectorAll('i').forEach((x, k) => x.classList.toggle('on', k === i));
   };
+  // no computador não dá para arrastar com o dedo: clicar na bolinha leva ao cartão
+  d.onclick = (e) => {
+    const k = [...d.children].indexOf(e.target);
+    if (k >= 0) h.scrollTo({ left: k * (h.firstElementChild.offsetWidth + 10), behavior: 'smooth' });
+  };
 }
 
 function telaComprar() {
@@ -195,6 +200,7 @@ function telaSacola() {
   const pecas = sacola.reduce((s, i) => s + i.qtd, 0);
   return `
     <div class="tit"><h1>Sacola</h1><p>${pecas} ${pecas === 1 ? 'peça' : 'peças'}</p></div>
+    <div class="sac">
     <div class="itens">${sacola.map((i, k) => {
       const p = porId(i.id);
       const max = estoqueDe(p, i.tam);
@@ -210,6 +216,7 @@ function telaSacola() {
       <a class="btn" href="#finalizar">Finalizar compra</a>
       <button class="btn sec" data-pedir style="margin-top:10px">${icoWhats()} Pedir pelo WhatsApp</button>
       <button class="lnk" data-esvaziar>Esvaziar sacola</button>
+    </div>
     </div>`;
 }
 function telaLoja() {

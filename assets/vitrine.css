@@ -124,6 +124,53 @@ body.vit .toast { bottom: calc(100px + env(safe-area-inset-bottom)); }
   .trilho { grid-auto-columns: 22%; }
 }
 
+/* computador: menu no topo, banner com 3 cartões, faixas em grade */
+.vlogo { display: none; }
+@media (min-width: 1024px) {
+  body.vit { padding-bottom: 40px; }
+  body.vit .toast { bottom: 32px; }
+  .vtop-in { height: 84px; padding: 0 24px; justify-content: flex-start; gap: 14px; }
+  .vlogo { display: flex; align-items: center; gap: 10px; margin-right: 10px; flex: none; }
+  .vlogo img { height: 40px; width: auto; }
+  .vlogo .mn { height: 12px; }
+  #btnBusca { margin-left: auto; }
+  .vtop.buscando .busca { margin-right: 0; }
+  /* a barra de abas vira o menu do topo, à direita */
+  .vtop-in { padding-right: 620px; }
+  .abas { top: 16px; bottom: auto; left: auto; right: max(24px, calc((100vw - 1200px) / 2 + 24px)); transform: none; width: auto; max-width: none; height: 52px; border-radius: 999px; grid-template-columns: repeat(5, auto); gap: 2px; padding: 0 6px; box-shadow: var(--sombra); }
+  .abas button { flex-direction: row; gap: 7px; font-size: 15px; height: 40px; padding: 0 12px; border-radius: 999px; }
+  .abas button:hover { background: var(--cinza); }
+  .abas button.on { background: var(--cinza); }
+  .abas button svg { width: 20px; height: 20px; }
+  .abas .badge-n { position: static; margin-left: 2px; }
+
+  .hero { padding: 4px 24px 0; scroll-padding: 0 24px; }
+  .slide { flex-basis: calc((100% - 20px) / 3); max-width: none; }
+  .dots i { cursor: pointer; }
+  .blocos { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 12px; }
+  .bloco { border-radius: 6px; }
+  .bloco b { font-size: 22px; left: 18px; bottom: 16px; }
+  .faixa { padding: 24px 0; }
+  .faixa h2 { font-size: 22px; padding: 0 24px 16px; }
+  .trilho { grid-auto-flow: row; grid-template-columns: repeat(4, 1fr); overflow: visible; gap: 28px 14px; padding: 0 24px; }
+  .times { padding: 0 24px; }
+
+  .tit { padding: 18px 24px 16px; }
+  .tit h1 { font-size: 36px; }
+  .vit .chips { padding: 0 24px 16px; }
+  .grid { padding: 0 24px 60px; }
+
+  /* sacola: itens à esquerda, total fixo à direita */
+  .sac { display: grid; grid-template-columns: 1fr 380px; gap: 40px; padding: 0 24px; align-items: start; }
+  .sac .itens { padding: 0; }
+  .sac .resumo { margin: 0; position: sticky; top: 100px; background: var(--sf); border-radius: 22px; padding: 22px 24px; }
+  .sac .resumo .l.t { border-top: 0; margin-top: 0; padding-top: 0; }
+  .item { grid-template-columns: 120px 1fr; }
+
+  /* telas estreitas ficam centralizadas */
+  .lojab, .fin, .ok-pg, .tit:has(+ .fin) { max-width: 640px; margin-left: auto; margin-right: auto; }
+}
+
 /* finalizar compra */
 .voltar-lnk { display: inline-flex; align-items: center; gap: 4px; color: var(--tx2); font-size: 14px; margin-bottom: 6px; }
 .fin { padding: 0 16px 20px; display: flex; flex-direction: column; gap: 12px; }
