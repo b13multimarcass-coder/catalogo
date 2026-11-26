@@ -9,13 +9,27 @@ const S = { aba: 'painel', periodo: '30', filtroProd: 'todos', filtroPed: 'pago'
 const catalogo = new URL('./', location.href).href;
 const linkProduto = (id) => catalogo + '#p/' + id;
 
-function toast(t) {
+function toast(t, ms) {
   const el = $('#toast');
   el.textContent = t;
   el.classList.add('on');
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => el.classList.remove('on'), 2000);
+  toast.t = setTimeout(() => el.classList.remove('on'), ms || Math.max(2000, t.length * 60));
 }
+// traduz o erro do Firebase para o lojista entender o que houve
+function msgErro(err) {
+  const c = String(err?.code || '').replace('firestore/', '');
+  if (c === 'permission-denied') return 'Sem permissão para salvar: esta conta não está liberada como lojista ou as regras do Firestore estão desatualizadas.';
+  if (c === 'unavailable' || c === 'deadline-exceeded' || err?.message === 'prazo') return 'Não consegui falar com o banco de dados. Confira a internet e tente de novo.';
+  if (c === 'resource-exhausted') return 'O limite diário do Firebase acabou. Tente de novo amanhã.';
+  if (c === 'unauthenticated') return 'Sua sessão expirou. Saia e entre de novo.';
+  return 'Não deu para salvar: ' + String(err?.message || err).slice(0, 140);
+}
+// gravação que não responde em 20 s vira erro (antes o botão ficava parado sem aviso)
+const comPrazo = (p, s = 20) => Promise.race([p, new Promise((_, n) => setTimeout(() => n(new Error('prazo')), s * 1000))]);
+// nenhum erro passa calado: mostra na tela o que aconteceu
+window.addEventListener('unhandledrejection', (ev) => { console.error(ev.reason); toast(msgErro(ev.reason), 8000); });
+window.addEventListener('error', (ev) => { if (ev.error) toast(msgErro(ev.error), 8000); });
 async function copiar(t, msg) {
   try { await navigator.clipboard.writeText(t); } catch {
     const a = document.createElement('textarea'); a.value = t; document.body.append(a); a.select(); document.execCommand('copy'); a.remove();
@@ -795,23 +809,23 @@ function lote() {
 
     salvando = true; lembrar();
     const variacoesDe = (gr) => TAMANHOS[g.categoria].filter((t) => gr[t] > 0).map((t) => ({ tam: t, qtd: gr[t] }));
-    let ok = 0;
+    let ok = 0, ultimoErro = null;
     for (let i = 0; i < itens.length; ) {
       const it = itens[i];
       b.disabled = true; b.textContent = `Salvando ${ok + 1} de ${ok + itens.length}…`;
       try {
-        await api.salvarProduto({
+        await comPrazo(api.salvarProduto({
           dados: { nome: it.nome.trim() || sugestao(it), categoria: g.categoria, versao: g.categoria === 'camisa' ? g.versao : '', time: it.time.trim(), marca: g.marca.trim(), descricao: '', preco: it.preco || g.preco, promo: null, variacoes: variacoesDe(it.grade || g.grade), visivel: true, destaque: false, esgotadoManual: false },
           custo: g.custo, fotos: it.fotos
-        });
+        }), 40);
         itens.splice(i, 1); ok++;
-      } catch (err) { console.error(err); i++; }
+      } catch (err) { console.error(err); ultimoErro = err; i++; }
     }
     salvando = false;
     await carregar();
     if (!itens.length) { fecharPagina(); desenhar(); return toast(`${ok} ${ok === 1 ? 'produto salvo' : 'produtos salvos'}`); }
     redesenharItens();
-    toast(`${ok} salvos. ${itens.length} não salvaram: tente de novo.`);
+    toast(`${ok} salvos. ${itens.length} não salvaram. ${msgErro(ultimoErro)}`, 9000);
   };
 }
 
@@ -973,10 +987,10 @@ async function editor(id, base = null) {
           preco: e.preco, promo: e.promo && e.promo < e.preco ? e.promo : null, variacoes: e.variacoes,
           visivel: e.visivel !== false, destaque: !!e.destaque, esgotadoManual: !!e.esgotadoManual
         };
-        await api.salvarProduto({ id: orig?.id, dados, custo: e.custo, fotos: e.fotos });
+        await comPrazo(api.salvarProduto({ id: orig?.id, dados, custo: e.custo, fotos: e.fotos }), 40);
         fecharPagina(); toast('Produto salvo'); recarregar();
       } catch (err) {
-        console.error(err); toast(err.message?.length < 120 ? err.message : 'Não deu para salvar. Tente de novo.');
+        console.error(err); toast(msgErro(err), 8000);
         t.disabled = false; t.textContent = 'Salvar';
       }
     }
@@ -1359,11 +1373,16 @@ function telaLoja() {
         const remMudou = Object.keys(rem).some((k) => rem[k] !== (S.rem?.[k] ?? ''));
         if (rem.documento && ![11, 14].includes(rem.documento.length)) return toast('O CPF tem 11 números e o CNPJ tem 14');
         if (rem.cep && rem.cep.length !== 8) return toast('O CEP do remetente precisa ter 8 números');
-        if (remMudou) {
-          try { await api.salvarRemetente(rem); }
-          catch { return toast('Não deu para salvar o remetente. Atualize as regras do Firestore (README).'); }
-        }
-        await api.salvarConfig(nova); toast('Dados da loja salvos'); recarregar();
+        b.disabled = true; const txt = b.textContent; b.textContent = 'Salvando…';
+        try {
+          if (remMudou) {
+            try { await comPrazo(api.salvarRemetente(rem)); }
+            catch (err) { console.error(err); return toast('Não deu para salvar o remetente. ' + msgErro(err), 8000); }
+          }
+          await comPrazo(api.salvarConfig(nova));
+        } catch (err) { console.error(err); return toast(msgErro(err), 8000); }
+        finally { b.disabled = false; b.textContent = txt; }
+        toast('Dados da loja salvos'); recarregar();
       }
       if (a === 'criarCupom') {
         const codigo = codigoCupom($('#cpCod').value), pct = parseInt($('#cpPct').value);
