@@ -208,4 +208,4 @@ a { color: inherit; text-decoration: none; }
 
 /* produto sem foto: em vez do ícone de imagem quebrada, fundo claro com o símbolo da B13 */
 img[src=""] { visibility: hidden; }
-:has(> img[src=""]) { background: #eef0f6 url(marca/simbolo-azul.png) center / 26% no-repeat; }
+:has(> img[src=""]) { background: #eef0f6 url(marca/simbolo-azul.png) center / 26% no-repeat !important; }
